@@ -19,6 +19,7 @@ import { Logo } from "@/components/logo";
 import { ModeToggle } from "@/components/mode-toggle";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/ui/use-toast";
+import { QRCodeSVG } from 'qrcode.react';
 
 interface Event {
   id: string;
@@ -44,6 +45,9 @@ export default function ScanPage() {
   const [scanInput, setScanInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [attendances, setAttendances] = useState<Student[]>([]);
+  const [showQR, setShowQR] = useState(false);
+
+  const attendanceUrl = `${window.location.origin}/public-attendance/${params.id}`;
 
   useEffect(() => {
     checkUser();
@@ -265,6 +269,28 @@ export default function ScanPage() {
             <p className="text-sm text-muted-foreground mt-2">
               Comparte este enlace con los estudiantes para que registren su asistencia directamente
             </p>
+            <div className="flex justify-center">
+              <Button
+                variant="outline"
+                onClick={() => setShowQR(!showQR)}
+                className="w-full md:w-auto"
+              >
+                <QrCode className="h-4 w-4 mr-2" />
+                {showQR ? 'Ocultar QR' : 'Mostrar QR'}
+              </Button>
+            </div>
+
+            {showQR && (
+              <div className="flex justify-center p-4">
+                <QRCodeSVG
+                  value={attendanceUrl}
+                  size={256}
+                  level="H"
+                  includeMargin={true}
+                  className="bg-white p-2 rounded-lg"
+                />
+              </div>
+            )}
           </div>
         </div>
 

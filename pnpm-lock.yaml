@@ -152,6 +152,9 @@ dependencies:
   postcss:
     specifier: 8.4.30
     version: 8.4.30
+  qrcode.react:
+    specifier: ^4.1.0
+    version: 4.1.0(react@18.2.0)
   react:
     specifier: 18.2.0
     version: 18.2.0
@@ -4011,6 +4014,14 @@ packages:
   /punycode@2.3.1:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
+    dev: false
+
+  /qrcode.react@4.1.0(react@18.2.0):
+    resolution: {integrity: sha512-uqXVIIVD/IPgWLYxbOczCNAQw80XCM/LulYDADF+g2xDsPj5OoRwSWtIS4jGyp295wyjKstfG1qIv/I2/rNWpQ==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0
+    dependencies:
+      react: 18.2.0
     dev: false
 
   /queue-microtask@1.2.3:
