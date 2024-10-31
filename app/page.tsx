@@ -9,9 +9,18 @@
   import { Logo } from "@/components/logo";
   import { supabase } from '@/lib/supabase';
 
+  interface Event {
+    id: string;
+    title: string;
+    date: string;
+    description: string | null;
+    created_by: string;
+    created_at: string;
+  }
+
   export default function Home() {
     const [user, setUser] = useState<any>(null);
-    const [events, setEvents] = useState([]);
+    const [events, setEvents] = useState<Event[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
