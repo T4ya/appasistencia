@@ -66,44 +66,26 @@ export default function PublicAttendancePage() {
     setLoading(true);
 
     try {
-      // Buscar estudiante por documento
-      const { data: student, error: studentError } = await supabase
-        .from('students')
-        .select('*')
-        .eq('document_id', documentId)
-        .single();
+      const response = await fetch('/api/attendance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          eventId: event?.id,
+          documentId: documentId,
+        }),
+      });
 
-      if (studentError || !student) {
-        throw new Error('Estudiante no encontrado');
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error);
       }
-
-      // Verificar si ya existe la asistencia
-      const { data: existingAttendance } = await supabase
-        .from('attendances')
-        .select('*')
-        .eq('event_id', event?.id)
-        .eq('student_id', student.id)
-        .single();
-
-      if (existingAttendance) {
-        throw new Error('Ya registraste tu asistencia para este evento');
-      }
-
-      // Registrar asistencia
-      const { error: attendanceError } = await supabase
-        .from('attendances')
-        .insert([
-          {
-            event_id: event?.id,
-            student_id: student.id,
-          }
-        ]);
-
-      if (attendanceError) throw attendanceError;
 
       toast({
         title: "¡Asistencia registrada!",
-        description: `La asistencia de ${student.full_name} ha sido registrada correctamente.`,
+        description: `La asistencia de ${data.student.full_name} ha sido registrada correctamente.`,
       });
 
       setDocumentId("");

@@ -41,19 +41,28 @@ export default function ScanPage() {
   const params = useParams();
   const router = useRouter();
   const { toast } = useToast();
+  
+  // Estados
   const [event, setEvent] = useState<Event | null>(null);
   const [scanInput, setScanInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [attendances, setAttendances] = useState<Student[]>([]);
   const [showQR, setShowQR] = useState(false);
+  const [attendanceUrl, setAttendanceUrl] = useState('');
 
-  const attendanceUrl = `${window.location.origin}/public-attendance/${params.id}`;
+  // Efectos
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setAttendanceUrl(`${window.location.origin}/public-attendance/${params.id}`);
+    }
+  }, [params.id]);
 
   useEffect(() => {
     checkUser();
     loadEventAndAttendances();
   }, [params.id]);
 
+  // Funciones de carga de datos
   const checkUser = async () => {
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -69,7 +78,6 @@ export default function ScanPage() {
 
   const loadEventAndAttendances = async () => {
     try {
-      // Cargar información del evento
       const { data: eventData, error: eventError } = await supabase
         .from('events')
         .select('*')
@@ -84,7 +92,6 @@ export default function ScanPage() {
 
       setEvent(eventData);
 
-      // Cargar asistencias
       const { data: attendanceData, error: attendanceError } = await supabase
         .from('attendances')
         .select(`
@@ -109,7 +116,6 @@ export default function ScanPage() {
       })) || [];
 
       setAttendances(formattedAttendances);
-
     } catch (error: any) {
       toast({
         variant: "destructive",
@@ -120,54 +126,32 @@ export default function ScanPage() {
     }
   };
 
+  // Manejadores de eventos
   const handleScan = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
 
     try {
-      // Buscar estudiante por documento de identidad
-      const { data: student, error: studentError } = await supabase
-        .from('students')
-        .select('*')
-        .eq('document_id', scanInput)
-        .single();
+      const response = await fetch('/api/attendance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          eventId: event?.id,
+          documentId: scanInput,
+        }),
+      });
 
-      if (studentError || !student) {
-        throw new Error('Estudiante no encontrado');
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error);
       }
-
-      // Verificar si ya existe la asistencia
-      const { data: existingAttendance } = await supabase
-        .from('attendances')
-        .select('*')
-        .eq('event_id', event?.id)
-        .eq('student_id', student.id)
-        .single();
-
-      if (existingAttendance) {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "El estudiante ya registró asistencia",
-        });
-        return;
-      }
-
-      // Registrar asistencia
-      const { error: attendanceError } = await supabase
-        .from('attendances')
-        .insert([
-          {
-            event_id: event?.id,
-            student_id: student.id,
-          }
-        ]);
-
-      if (attendanceError) throw attendanceError;
 
       toast({
         title: "Éxito",
-        description: `Asistencia registrada para ${student.full_name}`,
+        description: `Asistencia registrada para ${data.student.full_name}`,
       });
 
       setScanInput("");
@@ -205,24 +189,28 @@ export default function ScanPage() {
       ].join(','))
     ].join('\n');
 
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `asistencia_${event?.title}_${event?.date}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
+    if (typeof window !== 'undefined') {
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `asistencia_${event?.title}_${event?.date}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    }
   };
 
   const copyPublicLink = () => {
-    const publicLink = `${window.location.origin}/public-attendance/${params.id}`;
-    navigator.clipboard.writeText(publicLink);
-    toast({
-      title: "¡Enlace copiado!",
-      description: "El enlace para registro de asistencia ha sido copiado al portapapeles",
-    });
+    if (typeof window !== 'undefined') {
+      const publicLink = `${window.location.origin}/public-attendance/${params.id}`;
+      navigator.clipboard.writeText(publicLink);
+      toast({
+        title: "¡Enlace copiado!",
+        description: "El enlace para registro de asistencia ha sido copiado al portapapeles",
+      });
+    }
   };
 
   if (!event) return null;
@@ -258,7 +246,7 @@ export default function ScanPage() {
             <div className="flex items-center gap-2">
               <Input
                 readOnly
-                value={`${window.location.origin}/public-attendance/${event.id}`}
+                value={attendanceUrl}
                 className="bg-background"
               />
               <Button variant="outline" onClick={copyPublicLink}>
@@ -280,7 +268,7 @@ export default function ScanPage() {
               </Button>
             </div>
 
-            {showQR && (
+            {showQR && attendanceUrl && (
               <div className="flex justify-center p-4">
                 <QRCodeSVG
                   value={attendanceUrl}
