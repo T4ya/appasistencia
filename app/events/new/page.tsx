@@ -6,46 +6,70 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, CalendarPlus, MapPin } from "lucide-react";
+import { ArrowLeft, CalendarPlus, MapPin, ShieldAlert } from "lucide-react";
 import Link from "next/link";
 import { Logo } from "@/components/logo";
 import { ModeToggle } from "@/components/mode-toggle";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/ui/use-toast";
-import { 
+import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
-  CardTitle 
+  CardTitle,
 } from "@/components/ui/card";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Switch } from "@/components/ui/switch";
+
+interface GeolocationPosition {
+  coords: {
+    latitude: number;
+    longitude: number;
+    accuracy: number;
+  };
+}
 
 export default function NewEvent() {
   const router = useRouter();
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
-  const [locationLoading, setLocationLoading] = useState(false);
   const [formData, setFormData] = useState({
     title: "",
     date: "",
     description: "",
-    latitude: "",
-    longitude: "",
-    require_location: true,
-    location_radius: 10, // radio en metros
+    require_location: true, // Obligatorio por defecto
+    latitude: null as number | null,
+    longitude: null as number | null,
+    location_radius: 10, // 10 metros por defecto
   });
-  const [currentLocation, setCurrentLocation] = useState<string | null>(null);
+  const [userLocation, setUserLocation] = useState<{latitude: number, longitude: number} | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
 
   const ensureUserExists = async (userId: string, userEmail: string) => {
-    // Primero verificamos si el usuario ya existe
     const { data: existingUser } = await supabase
       .from('users')
       .select('id')
       .eq('id', userId)
       .single();
 
-    // Si el usuario no existe, lo creamos
     if (!existingUser) {
       const { error: insertError } = await supabase
         .from('users')
@@ -56,43 +80,33 @@ export default function NewEvent() {
     }
   };
 
-  const handleGetCurrentLocation = () => {
-    setLocationLoading(true);
-    
+  const requestUserLocation = () => {
     if (!navigator.geolocation) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Tu navegador no soporta geolocalización",
-      });
-      setLocationLoading(false);
+      setLocationError("Tu navegador no soporta geolocalización");
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude } = position.coords;
+      (position: GeolocationPosition) => {
+        setUserLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude
+        });
+        
         setFormData({
           ...formData,
-          latitude: latitude.toString(),
-          longitude: longitude.toString(),
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude
         });
-        setCurrentLocation(`${latitude}, ${longitude}`);
-        setLocationLoading(false);
         
-        toast({
-          title: "Ubicación obtenida",
-          description: "La ubicación del aula ha sido guardada correctamente",
-        });
+        setLocationError(null);
       },
       (error) => {
         console.error("Error getting location:", error);
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "No se pudo obtener la ubicación. " + error.message,
-        });
-        setLocationLoading(false);
+        setLocationError("Error al obtener tu ubicación. " + 
+          (error.code === 1 
+            ? "Por favor habilita la ubicación en tu navegador."
+            : "Intenta nuevamente."));
       },
       { enableHighAccuracy: true }
     );
@@ -103,15 +117,16 @@ export default function NewEvent() {
     setLoading(true);
 
     try {
-      // Obtener el usuario actual
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError) throw userError;
       if (!user) throw new Error('No user found');
 
-      // Asegurar que el usuario existe en la tabla users
       await ensureUserExists(user.id, user.email || '');
 
-      // Crear el evento
+      if (formData.require_location && (!formData.latitude || !formData.longitude)) {
+        throw new Error('Debes establecer la ubicación del evento si requiere verificación por ubicación.');
+      }
+
       const { error: eventError } = await supabase
         .from('events')
         .insert([
@@ -120,10 +135,10 @@ export default function NewEvent() {
             date: formData.date,
             description: formData.description,
             created_by: user.id,
-            latitude: formData.latitude || null,
-            longitude: formData.longitude || null,
             require_location: formData.require_location,
-            location_radius: formData.location_radius
+            latitude: formData.latitude,
+            longitude: formData.longitude,
+            location_radius: formData.location_radius,
           }
         ]);
 
@@ -211,72 +226,121 @@ export default function NewEvent() {
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Opciones de seguridad para asistencia</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <ShieldAlert className="h-5 w-5 text-primary" />
+                  Configuración de Seguridad
+                </CardTitle>
                 <CardDescription>
-                  Configura cómo se verificará la asistencia física al evento
+                  Configura cómo quieres verificar la asistencia a este evento
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label htmlFor="require_location" className="text-base">Requerir verificación de ubicación</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Los estudiantes deberán estar físicamente cerca para registrar asistencia
-                    </p>
-                  </div>
-                  <Switch
-                    id="require_location"
-                    checked={formData.require_location}
-                    onCheckedChange={(checked) =>
-                      setFormData({ ...formData, require_location: checked })
-                    }
-                  />
-                </div>
-
-                {formData.require_location && (
-                  <>
-                    <div className="space-y-2">
-                      <Label htmlFor="location">Ubicación del Aula</Label>
-                      <div className="flex gap-2">
-                        <Input
-                          id="location"
-                          value={currentLocation || "No establecida"}
-                          readOnly
-                          className="bg-muted"
-                        />
-                        <Button 
-                          type="button" 
-                          variant="outline"
-                          onClick={handleGetCurrentLocation}
-                          disabled={locationLoading}
-                        >
-                          <MapPin className="h-4 w-4 mr-2" />
-                          {locationLoading ? "Obteniendo..." : "Obtener Ubicación"}
-                        </Button>
+              <CardContent>
+                <Accordion type="single" collapsible className="w-full">
+                  <AccordionItem value="location">
+                    <AccordionTrigger>
+                      <div className="flex items-center gap-2">
+                        <MapPin className="h-4 w-4" />
+                        Verificación por Ubicación
                       </div>
-                      <p className="text-xs text-muted-foreground">
-                        Usa este botón mientras estés en el aula para guardar su ubicación exacta
-                      </p>
-                    </div>
+                    </AccordionTrigger>
+                    <AccordionContent>
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-0.5">
+                            <Label htmlFor="require-location">Requerir verificación por ubicación</Label>
+                            <p className="text-sm text-muted-foreground">
+                              Los estudiantes deberán estar cerca del lugar para registrar asistencia (10m por defecto).
+                            </p>
+                          </div>
+                          <Switch
+                            id="require-location"
+                            checked={formData.require_location}
+                            onCheckedChange={(checked) => {
+                              setFormData({ ...formData, require_location: checked });
+                              if (checked && !userLocation) {
+                                requestUserLocation();
+                              }
+                            }}
+                            disabled
+                          />
+                        </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="location_radius">Radio de proximidad (metros)</Label>
-                      <Input
-                        id="location_radius"
-                        type="number"
-                        min="5"
-                        max="100"
-                        value={formData.location_radius}
-                        onChange={(e) =>
-                          setFormData({ ...formData, location_radius: parseInt(e.target.value) || 10 })
-                        }
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Distancia máxima permitida desde la ubicación del aula
-                      </p>
-                    </div>
-                  </>
-                )}
+                        {formData.require_location && (
+                          <>
+                            {locationError && (
+                              <p className="text-sm text-destructive">{locationError}</p>
+                            )}
+                            
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <Label htmlFor="coordinates">Coordenadas del Evento</Label>
+                                <Button 
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={requestUserLocation}
+                                >
+                                  <MapPin className="h-4 w-4 mr-2" />
+                                  {userLocation ? "Actualizar ubicación" : "Obtener mi ubicación"}
+                                </Button>
+                              </div>
+                              
+                              {userLocation && (
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <Label htmlFor="latitude" className="text-xs">Latitud</Label>
+                                    <Input
+                                      id="latitude"
+                                      value={formData.latitude || ""}
+                                      onChange={(e) =>
+                                        setFormData({ ...formData, latitude: parseFloat(e.target.value) || null })
+                                      }
+                                      placeholder="Latitud"
+                                      disabled
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label htmlFor="longitude" className="text-xs">Longitud</Label>
+                                    <Input
+                                      id="longitude"
+                                      value={formData.longitude || ""}
+                                      onChange={(e) =>
+                                        setFormData({ ...formData, longitude: parseFloat(e.target.value) || null })
+                                      }
+                                      placeholder="Longitud"
+                                      disabled
+                                    />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                            
+                            <div className="space-y-2">
+                              <Label htmlFor="location-radius">
+                                Radio de verificación <span className="text-xs">({formData.location_radius} metros)</span>
+                              </Label>
+                              <Input
+                                id="location-radius"
+                                type="range"
+                                min="10"
+                                max="500"
+                                step="10"
+                                value={formData.location_radius}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, location_radius: parseInt(e.target.value) })
+                                }
+                              />
+                              <div className="flex justify-between text-xs text-muted-foreground">
+                                <span>10m</span>
+                                <span>500m</span>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
               </CardContent>
             </Card>
 

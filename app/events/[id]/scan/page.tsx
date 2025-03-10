@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ArrowLeft, Download, UserPlus, QrCode, Share2, RefreshCw, Shield } from "lucide-react";
+import { ArrowLeft, Download, UserPlus, QrCode, Share2, MapPin, Key } from "lucide-react";
 import Link from "next/link";
 import { Logo } from "@/components/logo";
 import { ModeToggle } from "@/components/mode-toggle";
@@ -21,19 +21,24 @@ import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/ui/use-toast";
 import { QRCodeSVG } from 'qrcode.react';
 import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
 
 interface Event {
   id: string;
   title: string;
   date: string;
   description: string;
-  latitude: string | null;
-  longitude: string | null;
+  latitude: number | null;
+  longitude: number | null;
   require_location: boolean;
   location_radius: number;
   current_pin: string | null;
@@ -47,10 +52,14 @@ interface Student {
   full_name: string;
   document_id: string;
   timestamp: string;
-  user_latitude?: number | null;
-  user_longitude?: number | null;
-  distance_from_location?: number | null;
-  verified_by_pin?: boolean | null;
+}
+
+interface GeolocationPosition {
+  coords: {
+    latitude: number;
+    longitude: number;
+    accuracy: number;
+  };
 }
 
 export default function ScanPage() {
@@ -59,264 +68,23 @@ export default function ScanPage() {
   const { toast } = useToast();
   const [event, setEvent] = useState<Event | null>(null);
   const [scanInput, setScanInput] = useState("");
+  const [pinInput, setPinInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [attendances, setAttendances] = useState<Student[]>([]);
   const [showQR, setShowQR] = useState(false);
-  const [currentPin, setCurrentPin] = useState<string>("");
+  const [currentPin, setCurrentPin] = useState<string | null>(null);
   const [pinExpiry, setPinExpiry] = useState<Date | null>(null);
-  const [showPinCard, setShowPinCard] = useState(false);
-  const [pinUpdateError, setPinUpdateError] = useState<string | null>(null);
+  const [userLocation, setUserLocation] = useState<{latitude: number, longitude: number} | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
 
-  const attendanceUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/public-attendance/${params.id}`;
-
-  // Actualizar el PIN en la base de datos con mejor manejo de errores
-  const updatePinInDatabase = async (pin: string, expiry: Date) => {
-    console.log('Intentando actualizar PIN en la base de datos:', pin, 'expira en:', expiry.toISOString());
-    
-    try {
-      // Asegurarse de que tenemos un ID válido
-      const eventId = params.id;
-      if (!eventId) {
-        console.error('ID de evento no disponible');
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "ID de evento no disponible",
-        });
-        return false;
-      }
-  
-      // Primero verificar que el evento existe
-      const { data: eventCheck, error: checkError } = await supabase
-        .from('events')
-        .select('id')
-        .eq('id', eventId)
-        .single();
-  
-      if (checkError || !eventCheck) {
-        console.error('Error verificando evento:', checkError);
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "No se pudo encontrar el evento",
-        });
-        return false;
-      }
-  
-      // Realizar la actualización SIN usar .select() después
-      const { error: updateError } = await supabase
-        .from('events')
-        .update({
-          current_pin: pin,
-          pin_expiry: expiry.toISOString()
-        })
-        .eq('id', eventId);
-  
-      if (updateError) {
-        console.error('Error de Supabase al actualizar PIN:', updateError);
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: `Error al actualizar PIN: ${updateError.message}`,
-        });
-        return false;
-      }
-  
-      // Verificar que el PIN se actualizó correctamente
-      const { data: verifyData, error: verifyError } = await supabase
-        .from('events')
-        .select('current_pin, pin_expiry')
-        .eq('id', eventId)
-        .single();
-  
-      if (verifyError || !verifyData) {
-        console.error('Error verificando actualización del PIN:', verifyError);
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "No se pudo verificar la actualización del PIN",
-        });
-        return false;
-      }
-  
-      // Comprobar si el PIN se actualizó realmente
-      if (verifyData.current_pin !== pin) {
-        console.error('El PIN no se actualizó correctamente:', verifyData.current_pin, 'vs', pin);
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "El PIN no se actualizó correctamente",
-        });
-        return false;
-      }
-  
-      console.log('¡PIN actualizado correctamente!', verifyData);
-      return true;
-    } catch (error: any) {
-      console.error('Excepción al actualizar PIN:', error);
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: `Error inesperado: ${error.message || 'Desconocido'}`,
-      });
-      return false;
-    }
-  };
-
-  // Generar un nuevo PIN con mejor manejo de errores
-  const generateNewPin = useCallback(async () => {
-    try {
-      // Generar PIN de 4 dígitos
-      const pin = Math.floor(1000 + Math.random() * 9000).toString();
-      
-      // Establecer expiración para un minuto a partir de ahora
-      const expiry = new Date();
-      expiry.setMinutes(expiry.getMinutes() + 1);
-      
-      console.log('Generando nuevo PIN:', pin, 'con expiración:', expiry.toISOString());
-      
-      // Primero actualizar en la base de datos
-      const updated = await updatePinInDatabase(pin, expiry);
-      
-      if (updated) {
-        // Solo actualizar el estado si la base de datos se actualizó correctamente
-        setCurrentPin(pin);
-        setPinExpiry(expiry);
-        console.log("PIN actualizado en estado local:", pin, "expira en:", expiry.toISOString());
-        return true;
-      } else {
-        console.error("No se pudo actualizar el PIN en la base de datos");
-        return false;
-      }
-    } catch (error: any) {
-      console.error('Error en generateNewPin:', error);
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: `Error al generar PIN: ${error.message || 'Error desconocido'}`,
-      });
-      return false;
-    }
-  }, [params.id, toast]);
-
-  // Cargar evento y mostrar PIN actual si existe
-  const loadEventAndAttendances = async () => {
-    try {
-      console.log('Loading event data for ID:', params.id);
-      
-      // Cargar información del evento
-      const { data: eventData, error: eventError } = await supabase
-        .from('events')
-        .select('*')
-        .eq('id', params.id)
-        .single();
-
-      if (eventError) {
-        console.error('Error loading event:', eventError);
-        throw eventError;
-      }
-      
-      if (!eventData) {
-        console.error('No event data found');
-        router.push('/');
-        return;
-      }
-
-      console.log('Event data loaded:', eventData);
-      setEvent(eventData);
-
-      // Si el evento ya tiene un PIN y no ha expirado, usarlo
-      if (eventData.current_pin && eventData.pin_expiry) {
-        const expiry = new Date(eventData.pin_expiry);
-        if (expiry > new Date()) {
-          console.log('Using existing PIN from database:', eventData.current_pin);
-          setCurrentPin(eventData.current_pin);
-          setPinExpiry(expiry);
-        } else {
-          console.log('Existing PIN has expired, will generate new one');
-        }
-      }
-
-      // Cargar asistencias con los campos adicionales
-      const { data: attendanceData, error: attendanceError } = await supabase
-        .from('attendances')
-        .select(`
-          id,
-          timestamp,
-          user_latitude,
-          user_longitude,
-          distance_from_location,
-          verified_by_pin,
-          students (
-            id,
-            code,
-            program,
-            full_name,
-            document_id
-          )
-        `)
-        .eq('event_id', params.id)
-        .order('timestamp', { ascending: false });
-
-      if (attendanceError) {
-        console.error('Error loading attendances:', attendanceError);
-        throw attendanceError;
-      }
-      
-      const formattedAttendances = attendanceData?.map((att: any) => ({
-        ...att.students,
-        timestamp: att.timestamp,
-        user_latitude: att.user_latitude,
-        user_longitude: att.user_longitude,
-        distance_from_location: att.distance_from_location,
-        verified_by_pin: att.verified_by_pin
-      })) || [];
-
-      console.log('Attendances loaded:', formattedAttendances);
-      setAttendances(formattedAttendances);
-
-    } catch (error: any) {
-      console.error('Error in loadEventAndAttendances:', error);
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Error al cargar el evento: " + error.message,
-      });
-      router.push('/');
-    }
-  };
+  const attendanceUrl = `${window.location.origin}/public-attendance/${params.id}`;
 
   useEffect(() => {
     checkUser();
     loadEventAndAttendances();
-    
-    // Generar un PIN inicial solo si es necesario (no hay uno válido en la BD)
-    const initPin = async () => {
-      // generateNewPin se encargará de verificar si ya hay un PIN válido
-      await generateNewPin();
-    };
-    
-    initPin();
-    
-    // Establecer un intervalo para regenerar el PIN cada minuto
-    const interval = setInterval(() => {
-      generateNewPin();
-    }, 60000); // 60 segundos
-    
-    return () => clearInterval(interval);
-  }, [params.id, generateNewPin]);
-  
-  // Efecto para actualizar el tiempo restante del PIN
-  useEffect(() => {
-    const timerInterval = setInterval(() => {
-      if (pinExpiry) {
-        // Forzar re-render para actualizar el temporizador
-        setPinExpiry(new Date(pinExpiry.getTime()));
-      }
-    }, 1000);
-    
-    return () => clearInterval(timerInterval);
-  }, [pinExpiry]);
+    const pinInterval = setInterval(generatePin, 30000); // Renovar PIN cada 30 segundos
+    return () => clearInterval(pinInterval);
+  }, [params.id]);
 
   const checkUser = async () => {
     try {
@@ -331,12 +99,210 @@ export default function ScanPage() {
     }
   };
 
-  const handleScan = async (e: React.FormEvent) => {
+  const loadEventAndAttendances = async () => {
+    try {
+      const { data: eventData, error: eventError } = await supabase
+        .from('events')
+        .select('*')
+        .eq('id', params.id)
+        .single();
+
+      if (eventError) throw eventError;
+      if (!eventData) {
+        router.push('/');
+        return;
+      }
+
+      setEvent(eventData);
+
+      if (eventData.latitude && eventData.longitude && eventData.require_location) {
+        requestUserLocation();
+      }
+
+      const { data: attendanceData, error: attendanceError } = await supabase
+        .from('attendances')
+        .select(`
+          id,
+          timestamp,
+          students (
+            id,
+            code,
+            program,
+            full_name,
+            document_id
+          )
+        `)
+        .eq('event_id', params.id)
+        .order('timestamp', { ascending: false });
+
+      if (attendanceError) throw attendanceError;
+
+      const formattedAttendances = attendanceData?.map((att: any) => ({
+        ...att.students,
+        timestamp: att.timestamp,
+      })) || [];
+
+      setAttendances(formattedAttendances);
+
+      await checkCurrentPin();
+
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Error al cargar el evento: " + error.message,
+      });
+      router.push('/');
+    }
+  };
+
+  const requestUserLocation = () => {
+    if (!navigator.geolocation) {
+      setLocationError("Tu navegador no soporta geolocalización. Usa el código PIN.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position: GeolocationPosition) => {
+        setUserLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude
+        });
+        setLocationError(null);
+      },
+      (error) => {
+        console.error("Error getting location:", error);
+        setLocationError("Error al obtener tu ubicación. Usa el código PIN: " + 
+          (error.code === 1 
+            ? "Por favor habilita la ubicación en tu navegador o usa el código PIN." 
+            : "Intenta nuevamente o usa el código PIN."));
+      },
+      { enableHighAccuracy: true }
+    );
+  };
+
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    if (!lat1 || !lon1 || !lat2 || !lon2) {
+      return Infinity; // Retornar infinito si alguna coordenada no es válida
+    }
+
+    const R = 6371e3; // Radio de la Tierra en metros
+    const φ1 = (lat1 * Math.PI) / 180;
+    const φ2 = (lat2 * Math.PI) / 180;
+    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c; // Distancia en metros
+  };
+
+  const isWithinRadius = (): boolean => {
+    if (!event || !event.latitude || !event.longitude || !userLocation) {
+      return false;
+    }
+
+    const distance = calculateDistance(
+      event.latitude,
+      event.longitude,
+      userLocation.latitude,
+      userLocation.longitude
+    );
+
+    return distance <= event.location_radius;
+  };
+
+  const generatePin = async () => {
+    if (!event) return;
+
+    try {
+      const newPin = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiryDate = new Date();
+      expiryDate.setSeconds(expiryDate.getSeconds() + 30);
+
+      const { error } = await supabase
+        .from('events')
+        .update({
+          current_pin: newPin,
+          pin_expiry: expiryDate.toISOString()
+        })
+        .eq('id', event.id);
+
+      if (error) throw error;
+
+      setCurrentPin(newPin);
+      setPinExpiry(expiryDate);
+
+      await supabase
+        .from('event_pins')
+        .insert([
+          {
+            event_id: event.id,
+            pin: newPin,
+            expires_at: expiryDate.toISOString(),
+            created_at: new Date().toISOString(),
+            used: false
+          }
+        ]);
+
+    } catch (error: any) {
+      console.error('Error generating PIN:', error);
+    }
+  };
+
+  const checkCurrentPin = async () => {
+    if (!event) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('events')
+        .select('current_pin, pin_expiry')
+        .eq('id', event.id)
+        .single();
+
+      if (error) throw error;
+
+      if (data.current_pin && data.pin_expiry) {
+        const expiryDate = new Date(data.pin_expiry);
+        if (expiryDate > new Date()) {
+          setCurrentPin(data.current_pin);
+          setPinExpiry(expiryDate);
+        } else {
+          await generatePin();
+        }
+      } else {
+        await generatePin();
+      }
+    } catch (error: any) {
+      console.error('Error checking PIN:', error);
+    }
+  };
+
+  const handleScanByDocument = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
 
     try {
-      // Buscar estudiante por documento de identidad
+      if (event?.require_location && event.latitude && event.longitude) {
+        if (!userLocation) {
+          throw new Error('Es necesario permitir acceso a tu ubicación o usar un código PIN.');
+        }
+
+        const distance = calculateDistance(
+          event.latitude,
+          event.longitude,
+          userLocation.latitude,
+          userLocation.longitude
+        );
+
+        if (!isFinite(distance) || distance > event.location_radius) {
+          throw new Error(`Debes estar dentro de un radio de ${(event.location_radius/1000).toFixed(2)}km del lugar del evento. Usa el código PIN si estás autorizado.`);
+        }
+      }
+
       const { data: student, error: studentError } = await supabase
         .from('students')
         .select('*')
@@ -347,7 +313,6 @@ export default function ScanPage() {
         throw new Error('Estudiante no encontrado');
       }
 
-      // Verificar si ya existe la asistencia
       const { data: existingAttendance } = await supabase
         .from('attendances')
         .select('*')
@@ -364,14 +329,20 @@ export default function ScanPage() {
         return;
       }
 
-      // Registrar asistencia
+      const distance = event?.latitude && event?.longitude && userLocation
+        ? calculateDistance(event.latitude, event.longitude, userLocation.latitude, userLocation.longitude)
+        : null;
+
       const { error: attendanceError } = await supabase
         .from('attendances')
         .insert([
           {
             event_id: event?.id,
             student_id: student.id,
-            verified_by_pin: true // Asumimos verificación manual por el profesor
+            user_latitude: userLocation?.latitude || null,
+            user_longitude: userLocation?.longitude || null,
+            distance_from: distance,
+            verified_by: 'document'
           }
         ]);
 
@@ -396,6 +367,124 @@ export default function ScanPage() {
     }
   };
 
+  const handleScanByPin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      if (pinInput !== currentPin) {
+        throw new Error('Código PIN incorrecto');
+      }
+
+      if (!pinExpiry || new Date() > pinExpiry) {
+        throw new Error('El código PIN ha expirado');
+      }
+
+      const { data: student, error: studentError } = await supabase
+        .from('students')
+        .select('*')
+        .eq('document_id', scanInput)
+        .single();
+
+      if (studentError || !student) {
+        throw new Error('Estudiante no encontrado');
+      }
+
+      const { data: existingAttendance } = await supabase
+        .from('attendances')
+        .select('*')
+        .eq('event_id', event?.id)
+        .eq('student_id', student.id)
+        .single();
+
+      if (existingAttendance) {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "El estudiante ya registró asistencia",
+        });
+        return;
+      }
+
+      await supabase
+        .from('event_pins')
+        .update({ used: true, verified_by: 'Profesor' })
+        .eq('event_id', event?.id)
+        .eq('pin', currentPin);
+
+      const { error: attendanceError } = await supabase
+        .from('attendances')
+        .insert([
+          {
+            event_id: event?.id,
+            student_id: student.id,
+            user_latitude: userLocation?.latitude || null,
+            user_longitude: userLocation?.longitude || null,
+            distance_from: userLocation && event?.latitude && event?.longitude
+              ? calculateDistance(event.latitude, event.longitude, userLocation.latitude, userLocation.longitude)
+              : null,
+            verified_by: 'pin',
+            verified_by_pin: true,
+            verification_method: 'PIN'
+          }
+        ]);
+
+      if (attendanceError) throw attendanceError;
+
+      toast({
+        title: "Éxito",
+        description: `Asistencia registrada para ${student.full_name} (verificada por PIN)`,
+      });
+
+      setScanInput("");
+      setPinInput("");
+      generatePin();
+      loadEventAndAttendances();
+
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message,
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateEventLocation = async () => {
+    if (!userLocation || !event) return;
+
+    try {
+      setLoading(true);
+      const { error } = await supabase
+        .from('events')
+        .update({
+          latitude: userLocation.latitude,
+          longitude: userLocation.longitude,
+          require_location: true
+        })
+        .eq('id', event.id);
+
+      if (error) throw error;
+
+      toast({
+        title: "Ubicación actualizada",
+        description: "La ubicación del evento ha sido actualizada correctamente",
+      });
+
+      loadEventAndAttendances();
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message,
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const downloadAttendances = () => {
     if (attendances.length === 0) {
       toast({
@@ -407,17 +496,13 @@ export default function ScanPage() {
     }
 
     const csv = [
-      ['Código', 'Nombre', 'Programa', 'Documento', 'Hora', 'Latitud', 'Longitud', 'Distancia (m)', 'Verificado por PIN'].join(','),
+      ['Código', 'Nombre', 'Programa', 'Documento', 'Hora'].join(','),
       ...attendances.map((student) => [
         student.code,
         student.full_name,
         student.program,
         student.document_id,
-        new Date(student.timestamp).toLocaleString(),
-        student.user_latitude || 'N/A',
-        student.user_longitude || 'N/A',
-        student.distance_from_location ? Math.round(student.distance_from_location) : 'N/A',
-        student.verified_by_pin ? 'Sí' : 'No'
+        new Date(student.timestamp).toLocaleString()
       ].join(','))
     ].join('\n');
 
@@ -441,25 +526,18 @@ export default function ScanPage() {
     });
   };
 
-  // Calcular el tiempo restante para la expiración del PIN
-  const getRemainingTime = () => {
+  const getTimeRemaining = (): string => {
     if (!pinExpiry) return "00:00";
-    
-    const now = new Date();
-    const diff = Math.max(0, Math.floor((pinExpiry.getTime() - now.getTime()) / 1000));
-    const seconds = diff % 60;
-    const minutes = Math.floor(diff / 60);
-    
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-  };
 
-  // Regenerar PIN manualmente
-  const handleRegeneratePin = async () => {
-    await generateNewPin();
-    toast({
-      title: "PIN Actualizado",
-      description: "Se ha generado un nuevo PIN de verificación",
-    });
+    const now = new Date();
+    const diff = pinExpiry.getTime() - now.getTime();
+
+    if (diff <= 0) return "00:00";
+
+    const seconds = Math.floor((diff / 1000) % 60);
+    const minutes = Math.floor((diff / 1000 / 60) % 60);
+
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
 
   if (!event) return null;
@@ -490,111 +568,127 @@ export default function ScanPage() {
             <p className="text-muted-foreground mt-2">{event.description}</p>
           )}
 
-          {event.latitude && event.longitude && (
-            <p className="text-muted-foreground mt-2">
-              Ubicación registrada: {event.latitude}, {event.longitude}
-              {event.require_location && ` (Radio: ${event.location_radius}m)`}
-            </p>
-          )}
-
-          <div className="mt-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Enlace para registro de asistencia */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Enlace para registro de asistencia</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center gap-2 mb-2">
-                    <Input
-                      readOnly
-                      value={`${window.location.origin}/public-attendance/${event.id}`}
-                      className="bg-background"
-                    />
-                    <Button variant="outline" onClick={copyPublicLink}>
-                      <Share2 className="h-4 w-4 mr-2" />
-                      Copiar
-                    </Button>
-                  </div>
-                  <p className="text-sm text-muted-foreground mb-4">
-                    Comparte este enlace con los estudiantes para que registren su asistencia
-                  </p>
-                  <div className="flex justify-center">
-                    <Button
-                      variant="outline"
-                      onClick={() => setShowQR(!showQR)}
-                      className="w-full"
-                    >
-                      <QrCode className="h-4 w-4 mr-2" />
-                      {showQR ? 'Ocultar QR' : 'Mostrar QR'}
-                    </Button>
-                  </div>
-
-                  {showQR && (
-                    <div className="flex justify-center p-4">
-                      <QRCodeSVG
-                        value={attendanceUrl}
-                        size={200}
-                        level="H"
-                        includeMargin={true}
-                        className="bg-white p-2 rounded-lg"
-                      />
-                    </div>
+          {event.require_location ? (
+            <div className="mt-4 p-4 border rounded-lg bg-muted">
+              <div className="flex items-center gap-2 mb-2">
+                <MapPin className="h-4 w-4 text-primary" />
+                <h3 className="font-medium">Ubicación del evento</h3>
+              </div>
+              {event.latitude && event.longitude ? (
+                <p className="text-sm text-muted-foreground">
+                  Coordenadas: {event.latitude.toFixed(6)}, {event.longitude.toFixed(6)}
+                  {userLocation && event.latitude && event.longitude && (
+                    <> - Distancia: {(calculateDistance(
+                      event.latitude, 
+                      event.longitude, 
+                      userLocation.latitude, 
+                      userLocation.longitude
+                    ) / 1000).toFixed(2)}km</>
                   )}
-                </CardContent>
-              </Card>
-
-              {/* PIN de verificación */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center">
-                    <Shield className="h-5 w-5 mr-2 text-primary" />
-                    PIN de verificación
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <Button
-                    variant={showPinCard ? "default" : "outline"}
-                    className="w-full mb-4"
-                    onClick={() => setShowPinCard(!showPinCard)}
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No hay coordenadas establecidas para este evento.
+                </p>
+              )}
+              
+              <div className="mt-2">
+                {!event.latitude && !event.longitude && userLocation && (
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={updateEventLocation}
+                    disabled={loading}
                   >
-                    {showPinCard ? 'Ocultar PIN' : 'Mostrar PIN'}
+                    <MapPin className="h-4 w-4 mr-2" />
+                    Establecer ubicación actual
                   </Button>
-                  
-                  {showPinCard && (
-                    <div className="bg-muted p-6 rounded-lg text-center">
-                      <p className="text-sm text-muted-foreground mb-2">
-                        Muestra este PIN a los estudiantes. Expira en:
-                      </p>
-                      <div className="text-sm font-mono mb-2">
-                        {getRemainingTime()}
-                      </div>
-                      <div className="text-4xl font-bold font-mono tracking-wider mb-4">
-                        {currentPin}
-                      </div>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        onClick={handleRegeneratePin}
-                        className="w-full"
-                      >
-                        <RefreshCw className="h-4 w-4 mr-2" />
-                        Generar nuevo PIN
-                      </Button>
-                      <p className="text-xs text-muted-foreground mt-2">
-                        Los estudiantes deberán ingresar este PIN para verificar su presencia
-                      </p>
-                      
-                      {pinUpdateError && (
-                        <div className="mt-2 p-2 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200 text-xs rounded">
-                          Error: {pinUpdateError}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                )}
+                {!userLocation && (
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={requestUserLocation}
+                    disabled={loading}
+                  >
+                    <MapPin className="h-4 w-4 mr-2" />
+                    Obtener mi ubicación
+                  </Button>
+                )}
+              </div>
+              
+              {locationError && (
+                <p className="text-sm text-destructive mt-2">
+                  {locationError}
+                </p>
+              )}
             </div>
+          ) : null}
+          
+          <div className="mt-4 p-4 border rounded-lg bg-muted">
+            <div className="flex items-center gap-2 mb-2">
+              <Key className="h-4 w-4 text-primary" />
+              <h3 className="font-medium">Código PIN actual</h3>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="text-2xl font-bold">{currentPin || '------'}</div>
+                <div className="text-sm">
+                  Expira en: <span className="font-semibold">{getTimeRemaining()}</span>
+                </div>
+              </div>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={generatePin}
+                disabled={loading}
+              >
+                Renovar PIN
+              </Button>
+            </div>
+            <p className="text-sm text-muted-foreground mt-2">
+              Este código se renueva cada 30 segundos y debe ser compartido en el aula.
+            </p>
+          </div>
+
+          <div className="mt-4 p-4 border rounded-lg bg-muted">
+            <h3 className="font-medium mb-2">Enlace para registro de asistencia:</h3>
+            <div className="flex items-center gap-2">
+              <Input
+                readOnly
+                value={`${window.location.origin}/public-attendance/${event.id}`}
+                className="bg-background"
+              />
+              <Button variant="outline" onClick={copyPublicLink}>
+                <Share2 className="h-4 w-4 mr-2" />
+                Copiar
+              </Button>
+            </div>
+            <p className="text-sm text-muted-foreground mt-2">
+              Comparte este enlace con los estudiantes para que registren su asistencia directamente
+            </p>
+            <div className="flex justify-center">
+              <Button
+                variant="outline"
+                onClick={() => setShowQR(!showQR)}
+                className="w-full md:w-auto"
+              >
+                <QrCode className="h-4 w-4 mr-2" />
+                {showQR ? 'Ocultar QR' : 'Mostrar QR'}
+              </Button>
+            </div>
+
+            {showQR && (
+              <div className="flex justify-center p-4">
+                <QRCodeSVG
+                  value={attendanceUrl}
+                  size={256}
+                  level="H"
+                  includeMargin={true}
+                  className="bg-white p-2 rounded-lg"
+                />
+              </div>
+            )}
           </div>
         </div>
 
@@ -614,9 +708,8 @@ export default function ScanPage() {
                   <TableRow>
                     <TableHead>Código</TableHead>
                     <TableHead>Nombre</TableHead>
+                    <TableHead>Programa</TableHead>
                     <TableHead>Documento</TableHead>
-                    <TableHead>Distancia</TableHead>
-                    <TableHead>Verificación</TableHead>
                     <TableHead>Hora</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -625,19 +718,8 @@ export default function ScanPage() {
                     <TableRow key={student.id}>
                       <TableCell>{student.code}</TableCell>
                       <TableCell>{student.full_name}</TableCell>
+                      <TableCell>{student.program}</TableCell>
                       <TableCell>{student.document_id}</TableCell>
-                      <TableCell>
-                        {student.distance_from_location 
-                          ? `${Math.round(student.distance_from_location)}m` 
-                          : 'N/A'}
-                      </TableCell>
-                      <TableCell>
-                        {student.verified_by_pin 
-                            ? 'PIN' 
-                            : (student.distance_from_location !== null && student.distance_from_location !== undefined && student.distance_from_location <= (event.location_radius || 10)) 
-                              ? 'Ubicación' 
-                              : 'N/A'}
-                      </TableCell>
                       <TableCell>
                         {new Date(student.timestamp).toLocaleTimeString()}
                       </TableCell>
@@ -645,7 +727,7 @@ export default function ScanPage() {
                   ))}
                   {attendances.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8">
+                      <TableCell colSpan={5} className="text-center py-8">
                         No hay registros de asistencia
                       </TableCell>
                     </TableRow>
@@ -656,26 +738,91 @@ export default function ScanPage() {
           </div>
 
           <div className="bg-card p-6 rounded-lg border h-fit">
-            <div className="flex items-center gap-2 mb-4">
-              <QrCode className="h-5 w-5 text-primary" />
-              <h2 className="text-xl font-semibold">Registrar Asistencia</h2>
-            </div>
-            <form onSubmit={handleScan} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="scan">Documento de Identidad</Label>
-                <Input
-                  id="scan"
-                  value={scanInput}
-                  onChange={(e) => setScanInput(e.target.value)}
-                  placeholder="Ingrese el documento de identidad"
-                  required
-                />
-              </div>
-              <Button type="submit" className="w-full" disabled={loading}>
-                <UserPlus className="h-4 w-4 mr-2" />
-                {loading ? "Registrando..." : "Registrar Asistencia"}
-              </Button>
-            </form>
+            <Tabs defaultValue="document">
+              <TabsList className="grid w-full grid-cols-2 mb-4">
+                <TabsTrigger value="document">Por Documento</TabsTrigger>
+                <TabsTrigger value="pin">Por PIN</TabsTrigger>
+              </TabsList>
+              
+              <TabsContent value="document">
+                <div className="flex items-center gap-2 mb-4">
+                  <UserPlus className="h-5 w-5 text-primary" />
+                  <h2 className="text-xl font-semibold">Registro por Documento</h2>
+                </div>
+                
+                {event.require_location && !userLocation && (
+                  <Alert className="mb-4" variant="destructive">
+                    <AlertTitle>Atención</AlertTitle>
+                    <AlertDescription>
+                      Este evento requiere verificación de ubicación. Por favor permite acceso a tu ubicación o usa el método de PIN.
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-2"
+                        onClick={requestUserLocation}
+                      >
+                        <MapPin className="h-4 w-4 mr-2" />
+                        Activar ubicación
+                      </Button>
+                    </AlertDescription>
+                  </Alert>
+                )}
+                
+                <form onSubmit={handleScanByDocument} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="scan">Documento de Identidad</Label>
+                    <Input
+                      id="scan"
+                      value={scanInput}
+                      onChange={(e) => setScanInput(e.target.value)}
+                      placeholder="Ingrese el documento de identidad"
+                      required
+                    />
+                  </div>
+                  <Button 
+                    type="submit" 
+                    className="w-full" 
+                    disabled={loading || (event.require_location && !userLocation)}
+                  >
+                    <UserPlus className="h-4 w-4 mr-2" />
+                    {loading ? "Registrando..." : "Registrar Asistencia"}
+                  </Button>
+                </form>
+              </TabsContent>
+              
+              <TabsContent value="pin">
+                <div className="flex items-center gap-2 mb-4">
+                  <Key className="h-5 w-5 text-primary" />
+                  <h2 className="text-xl font-semibold">Registro por PIN</h2>
+                </div>
+                <form onSubmit={handleScanByPin} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="scan-pin">Documento de Identidad</Label>
+                    <Input
+                      id="scan-pin"
+                      value={scanInput}
+                      onChange={(e) => setScanInput(e.target.value)}
+                      placeholder="Ingrese el documento de identidad"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="pin">Código PIN</Label>
+                    <Input
+                      id="pin"
+                      value={pinInput}
+                      onChange={(e) => setPinInput(e.target.value)}
+                      placeholder="Ingrese el código PIN"
+                      required
+                    />
+                  </div>
+                  <Button type="submit" className="w-full" disabled={loading}>
+                    <Key className="h-4 w-4 mr-2" />
+                    {loading ? "Verificando..." : "Verificar Asistencia"}
+                  </Button>
+                </form>
+              </TabsContent>
+            </Tabs>
           </div>
         </div>
       </main>
