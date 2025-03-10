@@ -633,10 +633,10 @@ export default function ScanPage() {
                       </TableCell>
                       <TableCell>
                         {student.verified_by_pin 
-                          ? 'PIN' 
-                          : (student.distance_from_location !== null && student.distance_from_location <= (event.location_radius || 10)) 
-                            ? 'Ubicación' 
-                            : 'N/A'}
+                            ? 'PIN' 
+                            : (student.distance_from_location !== null && student.distance_from_location !== undefined && student.distance_from_location <= (event.location_radius || 10)) 
+                              ? 'Ubicación' 
+                              : 'N/A'}
                       </TableCell>
                       <TableCell>
                         {new Date(student.timestamp).toLocaleTimeString()}
