@@ -6,22 +6,36 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, CalendarPlus } from "lucide-react";
+import { ArrowLeft, CalendarPlus, MapPin } from "lucide-react";
 import Link from "next/link";
 import { Logo } from "@/components/logo";
 import { ModeToggle } from "@/components/mode-toggle";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/ui/use-toast";
+import { 
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle 
+} from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
 
 export default function NewEvent() {
   const router = useRouter();
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
+  const [locationLoading, setLocationLoading] = useState(false);
   const [formData, setFormData] = useState({
     title: "",
     date: "",
     description: "",
+    latitude: "",
+    longitude: "",
+    require_location: true,
+    location_radius: 10, // radio en metros
   });
+  const [currentLocation, setCurrentLocation] = useState<string | null>(null);
 
   const ensureUserExists = async (userId: string, userEmail: string) => {
     // Primero verificamos si el usuario ya existe
@@ -40,6 +54,48 @@ export default function NewEvent() {
 
       if (insertError) throw insertError;
     }
+  };
+
+  const handleGetCurrentLocation = () => {
+    setLocationLoading(true);
+    
+    if (!navigator.geolocation) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Tu navegador no soporta geolocalización",
+      });
+      setLocationLoading(false);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        setFormData({
+          ...formData,
+          latitude: latitude.toString(),
+          longitude: longitude.toString(),
+        });
+        setCurrentLocation(`${latitude}, ${longitude}`);
+        setLocationLoading(false);
+        
+        toast({
+          title: "Ubicación obtenida",
+          description: "La ubicación del aula ha sido guardada correctamente",
+        });
+      },
+      (error) => {
+        console.error("Error getting location:", error);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "No se pudo obtener la ubicación. " + error.message,
+        });
+        setLocationLoading(false);
+      },
+      { enableHighAccuracy: true }
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -63,7 +119,11 @@ export default function NewEvent() {
             title: formData.title,
             date: formData.date,
             description: formData.description,
-            created_by: user.id
+            created_by: user.id,
+            latitude: formData.latitude || null,
+            longitude: formData.longitude || null,
+            require_location: formData.require_location,
+            location_radius: formData.location_radius
           }
         ]);
 
@@ -148,6 +208,77 @@ export default function NewEvent() {
                 placeholder="Descripción breve del evento"
               />
             </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Opciones de seguridad para asistencia</CardTitle>
+                <CardDescription>
+                  Configura cómo se verificará la asistencia física al evento
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label htmlFor="require_location" className="text-base">Requerir verificación de ubicación</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Los estudiantes deberán estar físicamente cerca para registrar asistencia
+                    </p>
+                  </div>
+                  <Switch
+                    id="require_location"
+                    checked={formData.require_location}
+                    onCheckedChange={(checked) =>
+                      setFormData({ ...formData, require_location: checked })
+                    }
+                  />
+                </div>
+
+                {formData.require_location && (
+                  <>
+                    <div className="space-y-2">
+                      <Label htmlFor="location">Ubicación del Aula</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="location"
+                          value={currentLocation || "No establecida"}
+                          readOnly
+                          className="bg-muted"
+                        />
+                        <Button 
+                          type="button" 
+                          variant="outline"
+                          onClick={handleGetCurrentLocation}
+                          disabled={locationLoading}
+                        >
+                          <MapPin className="h-4 w-4 mr-2" />
+                          {locationLoading ? "Obteniendo..." : "Obtener Ubicación"}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Usa este botón mientras estés en el aula para guardar su ubicación exacta
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="location_radius">Radio de proximidad (metros)</Label>
+                      <Input
+                        id="location_radius"
+                        type="number"
+                        min="5"
+                        max="100"
+                        value={formData.location_radius}
+                        onChange={(e) =>
+                          setFormData({ ...formData, location_radius: parseInt(e.target.value) || 10 })
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Distancia máxima permitida desde la ubicación del aula
+                      </p>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
 
             <Button type="submit" className="w-full" disabled={loading}>
               <CalendarPlus className="h-4 w-4 mr-2" />
