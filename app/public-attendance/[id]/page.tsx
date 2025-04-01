@@ -32,7 +32,6 @@ interface Event {
 interface Student {
   id: string;
   code: string;
-  program: string;
   full_name: string;
   document_id: string;
 }
@@ -200,49 +199,49 @@ export default function PublicAttendance() {
   const handleRegisterByLocation = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-
+  
     try {
       if (!event?.require_location) {
         throw new Error("Este evento no requiere verificación por ubicación.");
       }
-
+  
       if (!userLocation) {
         throw new Error("Debes permitir el acceso a tu ubicación o usar un código PIN.");
       }
-
+  
       if (!event.latitude || !event.longitude) {
         throw new Error("El evento no tiene coordenadas definidas. Usa el código PIN.");
       }
-
+  
       if (calculatedDistance === null || !isFinite(calculatedDistance)) {
         throw new Error(
           "No se pudo calcular la distancia. Verifica tu ubicación o usa el código PIN."
         );
-          }
-
+      }
+  
       if (!isWithinRadius()) {
         throw new Error(
           `Estás a ${calculatedDistance.toFixed(2)} metros del evento. Debes estar dentro de un radio de ${event.location_radius} metros. Usa el código PIN si estás autorizado.`
         );
       }
-
+  
       const { data: student, error: studentError } = await supabase
         .from("students")
         .select("*")
         .eq("document_id", documentInput)
         .single();
-
+  
       if (studentError || !student) {
         throw new Error("Estudiante no encontrado");
       }
-
+  
       const { data: existingAttendance } = await supabase
         .from("attendances")
         .select("*")
         .eq("event_id", event.id)
         .eq("student_id", student.id)
         .single();
-
+  
       if (existingAttendance) {
         toast({
           variant: "destructive",
@@ -251,7 +250,7 @@ export default function PublicAttendance() {
         });
         return;
       }
-
+  
       const { error: attendanceError } = await supabase
         .from("attendances")
         .insert([
@@ -264,14 +263,38 @@ export default function PublicAttendance() {
             verified_by: "location",
           },
         ]);
-
+  
       if (attendanceError) throw attendanceError;
-
+  
+      // NUEVO: Registrar en Google Sheets usando el endpoint directo
+      try {
+        const sheetsResponse = await fetch('/api/attendance-fix', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            eventId: event.id,
+            documentId: documentInput,
+            studentName: student.full_name
+          }),
+        });
+        
+        const sheetsResult = await sheetsResponse.json();
+        console.log("Resultado Google Sheets (Ubicación):", sheetsResult);
+        
+        if (!sheetsResponse.ok) {
+          console.warn("Advertencia de Google Sheets:", sheetsResult.error);
+        }
+      } catch (sheetError) {
+        console.error("Error con Google Sheets:", sheetError);
+      }
+  
       toast({
         title: "Éxito",
         description: `Asistencia registrada para ${student.full_name}`,
       });
-
+  
       setDocumentInput("");
       router.push("/");
     } catch (error: any) {
@@ -288,37 +311,37 @@ export default function PublicAttendance() {
   const handleRegisterByPin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-
+  
     try {
       if (pinInput !== currentPin) {
         throw new Error("Código PIN incorrecto");
       }
-
+  
       if (!pinExpiry || new Date() > pinExpiry) {
         throw new Error("El código PIN ha expirado");
       }
-
+  
       const { data: student, error: studentError } = await supabase
         .from("students")
         .select("*")
         .eq("document_id", documentInput)
         .single();
-
+  
       if (studentError || !student) {
         throw new Error("Estudiante no encontrado");
       }
-
+  
       if (!event) {
         throw new Error("Evento no encontrado");
       }
-
+  
       const { data: existingAttendance } = await supabase
         .from("attendances")
         .select("*")
         .eq("event_id", event.id)
         .eq("student_id", student.id)
         .single();
-
+  
       if (existingAttendance) {
         toast({
           variant: "destructive",
@@ -327,13 +350,13 @@ export default function PublicAttendance() {
         });
         return;
       }
-
+  
       await supabase
         .from("event_pins")
         .update({ used: true })
         .eq("event_id", event.id)
         .eq("pin", currentPin);
-
+  
       const { error: attendanceError } = await supabase
         .from("attendances")
         .insert([
@@ -348,14 +371,38 @@ export default function PublicAttendance() {
             verification_method: "PIN",
           },
         ]);
-
+  
       if (attendanceError) throw attendanceError;
-
+  
+      // NUEVO: Registrar en Google Sheets usando el endpoint directo
+      try {
+        const sheetsResponse = await fetch('/api/attendance-fix', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            eventId: event.id,
+            documentId: documentInput,
+            studentName: student.full_name
+          }),
+        });
+        
+        const sheetsResult = await sheetsResponse.json();
+        console.log("Resultado Google Sheets (PIN):", sheetsResult);
+        
+        if (!sheetsResponse.ok) {
+          console.warn("Advertencia de Google Sheets (PIN):", sheetsResult.error);
+        }
+      } catch (sheetError) {
+        console.error("Error con Google Sheets (PIN):", sheetError);
+      }
+  
       toast({
         title: "Éxito",
         description: `Asistencia registrada para ${student.full_name} (verificada por PIN)`,
       });
-
+  
       setDocumentInput("");
       setPinInput("");
       router.push("/");

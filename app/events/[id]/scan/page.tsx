@@ -47,8 +47,6 @@ interface Event {
 
 interface Student {
   id: string;
-  code: string;
-  program: string;
   full_name: string;
   document_id: string;
   timestamp: string;
@@ -126,8 +124,6 @@ export default function ScanPage() {
           timestamp,
           students (
             id,
-            code,
-            program,
             full_name,
             document_id
           )
@@ -284,42 +280,42 @@ export default function ScanPage() {
   const handleScanByDocument = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-
+  
     try {
       if (event?.require_location && event.latitude && event.longitude) {
         if (!userLocation) {
           throw new Error('Es necesario permitir acceso a tu ubicación o usar un código PIN.');
         }
-
+  
         const distance = calculateDistance(
           event.latitude,
           event.longitude,
           userLocation.latitude,
           userLocation.longitude
         );
-
+  
         if (!isFinite(distance) || distance > event.location_radius) {
           throw new Error(`Debes estar dentro de un radio de ${(event.location_radius/1000).toFixed(2)}km del lugar del evento. Usa el código PIN si estás autorizado.`);
         }
       }
-
+  
       const { data: student, error: studentError } = await supabase
         .from('students')
         .select('*')
         .eq('document_id', scanInput)
         .single();
-
+  
       if (studentError || !student) {
         throw new Error('Estudiante no encontrado');
       }
-
+  
       const { data: existingAttendance } = await supabase
         .from('attendances')
         .select('*')
         .eq('event_id', event?.id)
         .eq('student_id', student.id)
         .single();
-
+  
       if (existingAttendance) {
         toast({
           variant: "destructive",
@@ -328,11 +324,11 @@ export default function ScanPage() {
         });
         return;
       }
-
+  
       const distance = event?.latitude && event?.longitude && userLocation
         ? calculateDistance(event.latitude, event.longitude, userLocation.latitude, userLocation.longitude)
         : null;
-
+  
       const { error: attendanceError } = await supabase
         .from('attendances')
         .insert([
@@ -345,17 +341,43 @@ export default function ScanPage() {
             verified_by: 'document'
           }
         ]);
-
+  
       if (attendanceError) throw attendanceError;
-
+  
+      // NUEVO: Registrar en Google Sheets usando el endpoint directo
+      try {
+        const sheetsResponse = await fetch('/api/attendance-fix', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            eventId: event?.id,
+            documentId: scanInput,
+            studentName: student.full_name
+          }),
+        });
+        
+        const sheetsResult = await sheetsResponse.json();
+        console.log("Resultado Google Sheets:", sheetsResult);
+        
+        if (!sheetsResponse.ok) {
+          console.warn("Advertencia de Google Sheets:", sheetsResult.error);
+          // Continuamos incluso si hay un error con Google Sheets
+        }
+      } catch (sheetError) {
+        console.error("Error con Google Sheets:", sheetError);
+        // Continuamos incluso si falla Google Sheets
+      }
+  
       toast({
         title: "Éxito",
         description: `Asistencia registrada para ${student.full_name}`,
       });
-
+  
       setScanInput("");
       loadEventAndAttendances();
-
+  
     } catch (error: any) {
       toast({
         variant: "destructive",
@@ -370,33 +392,33 @@ export default function ScanPage() {
   const handleScanByPin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-
+  
     try {
       if (pinInput !== currentPin) {
         throw new Error('Código PIN incorrecto');
       }
-
+  
       if (!pinExpiry || new Date() > pinExpiry) {
         throw new Error('El código PIN ha expirado');
       }
-
+  
       const { data: student, error: studentError } = await supabase
         .from('students')
         .select('*')
         .eq('document_id', scanInput)
         .single();
-
+  
       if (studentError || !student) {
         throw new Error('Estudiante no encontrado');
       }
-
+  
       const { data: existingAttendance } = await supabase
         .from('attendances')
         .select('*')
         .eq('event_id', event?.id)
         .eq('student_id', student.id)
         .single();
-
+  
       if (existingAttendance) {
         toast({
           variant: "destructive",
@@ -405,13 +427,13 @@ export default function ScanPage() {
         });
         return;
       }
-
+  
       await supabase
         .from('event_pins')
         .update({ used: true, verified_by: 'Profesor' })
         .eq('event_id', event?.id)
         .eq('pin', currentPin);
-
+  
       const { error: attendanceError } = await supabase
         .from('attendances')
         .insert([
@@ -428,19 +450,43 @@ export default function ScanPage() {
             verification_method: 'PIN'
           }
         ]);
-
+  
       if (attendanceError) throw attendanceError;
-
+  
+      // NUEVO: Registrar en Google Sheets usando el endpoint directo
+      try {
+        const sheetsResponse = await fetch('/api/attendance-fix', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            eventId: event?.id,
+            documentId: scanInput,
+            studentName: student.full_name
+          }),
+        });
+        
+        const sheetsResult = await sheetsResponse.json();
+        console.log("Resultado Google Sheets (PIN):", sheetsResult);
+        
+        if (!sheetsResponse.ok) {
+          console.warn("Advertencia de Google Sheets (PIN):", sheetsResult.error);
+        }
+      } catch (sheetError) {
+        console.error("Error con Google Sheets (PIN):", sheetError);
+      }
+  
       toast({
         title: "Éxito",
         description: `Asistencia registrada para ${student.full_name} (verificada por PIN)`,
       });
-
+  
       setScanInput("");
       setPinInput("");
       generatePin();
       loadEventAndAttendances();
-
+  
     } catch (error: any) {
       toast({
         variant: "destructive",
@@ -496,11 +542,9 @@ export default function ScanPage() {
     }
 
     const csv = [
-      ['Código', 'Nombre', 'Programa', 'Documento', 'Hora'].join(','),
+      ['Nombre', 'Documento', 'Hora'].join(','),
       ...attendances.map((student) => [
-        student.code,
         student.full_name,
-        student.program,
         student.document_id,
         new Date(student.timestamp).toLocaleString()
       ].join(','))
@@ -706,9 +750,7 @@ export default function ScanPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Código</TableHead>
                     <TableHead>Nombre</TableHead>
-                    <TableHead>Programa</TableHead>
                     <TableHead>Documento</TableHead>
                     <TableHead>Hora</TableHead>
                   </TableRow>
@@ -716,9 +758,7 @@ export default function ScanPage() {
                 <TableBody>
                   {attendances.map((student) => (
                     <TableRow key={student.id}>
-                      <TableCell>{student.code}</TableCell>
                       <TableCell>{student.full_name}</TableCell>
-                      <TableCell>{student.program}</TableCell>
                       <TableCell>{student.document_id}</TableCell>
                       <TableCell>
                         {new Date(student.timestamp).toLocaleTimeString()}

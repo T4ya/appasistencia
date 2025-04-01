@@ -45,32 +45,62 @@ async function findStudentInSheet(documentId: string, eventId: string, sheetId: 
     });
 
     const values = response.data.values || [];
+    console.log(`Datos obtenidos: ${values.length} filas`);
 
     // Buscar el título del evento
     let eventColumnIndex = -1;
-    for (let row = 0; row < 6; row++) {
+    for (let row = 0; row < 10; row++) {
       const currentRow = values[row] || [];
       for (let col = 0; col < currentRow.length; col++) {
-        const cellValue = currentRow[col] || '';
+        const cellValue = String(currentRow[col] || '');
         if (cellValue && cellValue.includes(eventId)) {
           eventColumnIndex = col;
+          console.log(`Evento encontrado en [${row},${col}]`);
           break;
         }
       }
       if (eventColumnIndex !== -1) break;
     }
 
+    // Si no se encuentra el evento, crear una nueva columna
     if (eventColumnIndex === -1) {
-      console.log(`Evento no encontrado en hoja ${sheetId}`);
-      return null;
+      console.log(`Evento no encontrado, creando nueva columna...`);
+      
+      // Encontrar la primera columna disponible después de E (índice 5 = columna F)
+      eventColumnIndex = 5;
+      const headerRow = values[0] || [];
+      for (let i = 5; i < headerRow.length + 1; i++) {
+        if (!headerRow[i] || headerRow[i] === '') {
+          eventColumnIndex = i;
+          break;
+        }
+      }
+      
+      const colLetter = String.fromCharCode(65 + eventColumnIndex);
+      console.log(`Usando columna ${colLetter} (índice ${eventColumnIndex})`);
+      
+      // Agregar el ID del evento en la primera fila
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: sheetId,
+        range: `${WORKSHEET_NAME}!${colLetter}1`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: [[eventId]]
+        }
+      });
+      
+      console.log(`ID del evento agregado a la columna ${colLetter}`);
     }
 
     // Encontrar la fila del estudiante
     let studentRowIndex = -1;
     for (let i = 6; i < values.length; i++) {
-      if (values[i] && values[i][3] === documentId) { // Columna D (índice 3) es IDENTIFICACIÓN
-        studentRowIndex = i + 1;
-        console.log(`Estudiante encontrado en hoja ${sheetId}, fila:`, studentRowIndex);
+      const rowDocId = values[i] && values[i][3] ? String(values[i][3]).trim() : '';
+      const searchDocId = String(documentId).trim();
+      
+      if (rowDocId === searchDocId) {
+        studentRowIndex = i + 1; // +1 porque las filas en Sheets empiezan en 1
+        console.log(`Estudiante encontrado en fila ${studentRowIndex}`);
         break;
       }
     }
