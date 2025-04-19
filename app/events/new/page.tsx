@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState} from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, CalendarPlus, MapPin, ShieldAlert } from "lucide-react";
+import { ArrowLeft, CalendarPlus, ShieldAlert, Key, QrCode, Info } from "lucide-react";
 import Link from "next/link";
 import { Logo } from "@/components/logo";
 import { ModeToggle } from "@/components/mode-toggle";
@@ -25,27 +25,6 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Switch } from "@/components/ui/switch";
-
-interface GeolocationPosition {
-  coords: {
-    latitude: number;
-    longitude: number;
-    accuracy: number;
-  };
-}
 
 export default function NewEvent() {
   const router = useRouter();
@@ -55,13 +34,11 @@ export default function NewEvent() {
     title: "",
     date: "",
     description: "",
-    require_location: true, // Obligatorio por defecto
+    require_location: false, // No longer required
     latitude: null as number | null,
     longitude: null as number | null,
-    location_radius: 10, // 10 metros por defecto
+    location_radius: 10, // Default still 10 meters
   });
-  const [userLocation, setUserLocation] = useState<{latitude: number, longitude: number} | null>(null);
-  const [locationError, setLocationError] = useState<string | null>(null);
 
   const ensureUserExists = async (userId: string, userEmail: string) => {
     const { data: existingUser } = await supabase
@@ -80,38 +57,6 @@ export default function NewEvent() {
     }
   };
 
-  const requestUserLocation = () => {
-    if (!navigator.geolocation) {
-      setLocationError("Tu navegador no soporta geolocalización");
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (position: GeolocationPosition) => {
-        setUserLocation({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude
-        });
-        
-        setFormData({
-          ...formData,
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude
-        });
-        
-        setLocationError(null);
-      },
-      (error) => {
-        console.error("Error getting location:", error);
-        setLocationError("Error al obtener tu ubicación. " + 
-          (error.code === 1 
-            ? "Por favor habilita la ubicación en tu navegador."
-            : "Intenta nuevamente."));
-      },
-      { enableHighAccuracy: true }
-    );
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -123,10 +68,6 @@ export default function NewEvent() {
 
       await ensureUserExists(user.id, user.email || '');
 
-      if (formData.require_location && (!formData.latitude || !formData.longitude)) {
-        throw new Error('Debes establecer la ubicación del evento si requiere verificación por ubicación.');
-      }
-
       const { error: eventError } = await supabase
         .from('events')
         .insert([
@@ -135,10 +76,10 @@ export default function NewEvent() {
             date: formData.date,
             description: formData.description,
             created_by: user.id,
-            require_location: formData.require_location,
-            latitude: formData.latitude,
-            longitude: formData.longitude,
-            location_radius: formData.location_radius,
+            require_location: false, // Always false now
+            latitude: null,
+            longitude: null,
+            location_radius: 10, // Default value
           }
         ]);
 
@@ -231,112 +172,33 @@ export default function NewEvent() {
                   Configuración de Seguridad
                 </CardTitle>
                 <CardDescription>
-                  Configura cómo quieres verificar la asistencia a este evento
+                  Configuración del sistema de verificación de asistencia
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <Accordion type="single" collapsible className="w-full">
-                  <AccordionItem value="location">
+                  <AccordionItem value="verification">
                     <AccordionTrigger>
                       <div className="flex items-center gap-2">
-                        <MapPin className="h-4 w-4" />
-                        Verificación por Ubicación
+                        <Key className="h-4 w-4" />
+                        Verificación de Asistencia
                       </div>
                     </AccordionTrigger>
                     <AccordionContent>
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                          <div className="space-y-0.5">
-                            <Label htmlFor="require-location">Requerir verificación por ubicación</Label>
-                            <p className="text-sm text-muted-foreground">
-                              Los estudiantes deberán estar cerca del lugar para registrar asistencia (10m por defecto).
-                            </p>
-                          </div>
-                          <Switch
-                            id="require-location"
-                            checked={formData.require_location}
-                            onCheckedChange={(checked) => {
-                              setFormData({ ...formData, require_location: checked });
-                              if (checked && !userLocation) {
-                                requestUserLocation();
-                              }
-                            }}
-                            disabled
-                          />
+                      <div className="p-4 border rounded-lg bg-accent/20">
+                        <div className="flex items-center gap-2 mb-2">
+                          <QrCode className="h-4 w-4 text-primary" />
+                          <h3 className="font-medium">Sistema de Verificación por Código QR y PIN</h3>
                         </div>
-
-                        {formData.require_location && (
-                          <>
-                            {locationError && (
-                              <p className="text-sm text-destructive">{locationError}</p>
-                            )}
-                            
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <Label htmlFor="coordinates">Coordenadas del Evento</Label>
-                                <Button 
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={requestUserLocation}
-                                >
-                                  <MapPin className="h-4 w-4 mr-2" />
-                                  {userLocation ? "Actualizar ubicación" : "Obtener mi ubicación"}
-                                </Button>
-                              </div>
-                              
-                              {userLocation && (
-                                <div className="grid grid-cols-2 gap-2">
-                                  <div>
-                                    <Label htmlFor="latitude" className="text-xs">Latitud</Label>
-                                    <Input
-                                      id="latitude"
-                                      value={formData.latitude || ""}
-                                      onChange={(e) =>
-                                        setFormData({ ...formData, latitude: parseFloat(e.target.value) || null })
-                                      }
-                                      placeholder="Latitud"
-                                      disabled
-                                    />
-                                  </div>
-                                  <div>
-                                    <Label htmlFor="longitude" className="text-xs">Longitud</Label>
-                                    <Input
-                                      id="longitude"
-                                      value={formData.longitude || ""}
-                                      onChange={(e) =>
-                                        setFormData({ ...formData, longitude: parseFloat(e.target.value) || null })
-                                      }
-                                      placeholder="Longitud"
-                                      disabled
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                            
-                            <div className="space-y-2">
-                              <Label htmlFor="location-radius">
-                                Radio de verificación <span className="text-xs">({formData.location_radius} metros)</span>
-                              </Label>
-                              <Input
-                                id="location-radius"
-                                type="range"
-                                min="10"
-                                max="500"
-                                step="10"
-                                value={formData.location_radius}
-                                onChange={(e) =>
-                                  setFormData({ ...formData, location_radius: parseInt(e.target.value) })
-                                }
-                              />
-                              <div className="flex justify-between text-xs text-muted-foreground">
-                                <span>10m</span>
-                                <span>500m</span>
-                              </div>
-                            </div>
-                          </>
-                        )}
+                        <p className="text-sm text-muted-foreground mb-4">
+                          La asistencia se verificará mediante un código QR que los estudiantes deberán escanear y un código numérico de 4 dígitos que se regenera cada 30 segundos.
+                        </p>
+                        <div className="flex items-center p-3 bg-muted rounded-lg">
+                          <Info className="h-4 w-4 text-primary mr-2 flex-shrink-0" />
+                          <p className="text-xs">
+                            Este método reemplaza la verificación por ubicación GPS, que ha sido desactivada debido a problemas de precisión.
+                          </p>
+                        </div>
                       </div>
                     </AccordionContent>
                   </AccordionItem>

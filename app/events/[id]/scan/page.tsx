@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ArrowLeft, Download, UserPlus, QrCode, Share2, MapPin, Key } from "lucide-react";
+import { ArrowLeft, Download, UserPlus, QrCode, Share2, Key } from "lucide-react";
 import Link from "next/link";
 import { Logo } from "@/components/logo";
 import { ModeToggle } from "@/components/mode-toggle";
@@ -26,11 +26,6 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "@/components/ui/alert";
 
 interface Event {
   id: string;
@@ -213,12 +208,13 @@ export default function ScanPage() {
 
   const generatePin = async () => {
     if (!event) return;
-
+  
     try {
-      const newPin = Math.floor(100000 + Math.random() * 900000).toString();
+      // Generate a 4-digit PIN instead of 6
+      const newPin = Math.floor(1000 + Math.random() * 9000).toString();
       const expiryDate = new Date();
       expiryDate.setSeconds(expiryDate.getSeconds() + 30);
-
+  
       const { error } = await supabase
         .from('events')
         .update({
@@ -226,12 +222,12 @@ export default function ScanPage() {
           pin_expiry: expiryDate.toISOString()
         })
         .eq('id', event.id);
-
+  
       if (error) throw error;
-
+  
       setCurrentPin(newPin);
       setPinExpiry(expiryDate);
-
+  
       await supabase
         .from('event_pins')
         .insert([
@@ -243,7 +239,7 @@ export default function ScanPage() {
             used: false
           }
         ]);
-
+  
     } catch (error: any) {
       console.error('Error generating PIN:', error);
     }
@@ -282,23 +278,6 @@ export default function ScanPage() {
     setLoading(true);
   
     try {
-      if (event?.require_location && event.latitude && event.longitude) {
-        if (!userLocation) {
-          throw new Error('Es necesario permitir acceso a tu ubicación o usar un código PIN.');
-        }
-  
-        const distance = calculateDistance(
-          event.latitude,
-          event.longitude,
-          userLocation.latitude,
-          userLocation.longitude
-        );
-  
-        if (!isFinite(distance) || distance > event.location_radius) {
-          throw new Error(`Debes estar dentro de un radio de ${(event.location_radius/1000).toFixed(2)}km del lugar del evento. Usa el código PIN si estás autorizado.`);
-        }
-      }
-  
       const { data: student, error: studentError } = await supabase
         .from('students')
         .select('*')
@@ -325,50 +304,17 @@ export default function ScanPage() {
         return;
       }
   
-      const distance = event?.latitude && event?.longitude && userLocation
-        ? calculateDistance(event.latitude, event.longitude, userLocation.latitude, userLocation.longitude)
-        : null;
-  
       const { error: attendanceError } = await supabase
         .from('attendances')
         .insert([
           {
             event_id: event?.id,
             student_id: student.id,
-            user_latitude: userLocation?.latitude || null,
-            user_longitude: userLocation?.longitude || null,
-            distance_from: distance,
             verified_by: 'document'
           }
         ]);
   
       if (attendanceError) throw attendanceError;
-  
-      // NUEVO: Registrar en Google Sheets usando el endpoint directo
-      try {
-        const sheetsResponse = await fetch('/api/attendance-fix', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            eventId: event?.id,
-            documentId: scanInput,
-            studentName: student.full_name
-          }),
-        });
-        
-        const sheetsResult = await sheetsResponse.json();
-        console.log("Resultado Google Sheets:", sheetsResult);
-        
-        if (!sheetsResponse.ok) {
-          console.warn("Advertencia de Google Sheets:", sheetsResult.error);
-          // Continuamos incluso si hay un error con Google Sheets
-        }
-      } catch (sheetError) {
-        console.error("Error con Google Sheets:", sheetError);
-        // Continuamos incluso si falla Google Sheets
-      }
   
       toast({
         title: "Éxito",
@@ -611,72 +557,15 @@ export default function ScanPage() {
           {event.description && (
             <p className="text-muted-foreground mt-2">{event.description}</p>
           )}
-
-          {event.require_location ? (
-            <div className="mt-4 p-4 border rounded-lg bg-muted">
-              <div className="flex items-center gap-2 mb-2">
-                <MapPin className="h-4 w-4 text-primary" />
-                <h3 className="font-medium">Ubicación del evento</h3>
-              </div>
-              {event.latitude && event.longitude ? (
-                <p className="text-sm text-muted-foreground">
-                  Coordenadas: {event.latitude.toFixed(6)}, {event.longitude.toFixed(6)}
-                  {userLocation && event.latitude && event.longitude && (
-                    <> - Distancia: {(calculateDistance(
-                      event.latitude, 
-                      event.longitude, 
-                      userLocation.latitude, 
-                      userLocation.longitude
-                    ) / 1000).toFixed(2)}km</>
-                  )}
-                </p>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  No hay coordenadas establecidas para este evento.
-                </p>
-              )}
-              
-              <div className="mt-2">
-                {!event.latitude && !event.longitude && userLocation && (
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={updateEventLocation}
-                    disabled={loading}
-                  >
-                    <MapPin className="h-4 w-4 mr-2" />
-                    Establecer ubicación actual
-                  </Button>
-                )}
-                {!userLocation && (
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={requestUserLocation}
-                    disabled={loading}
-                  >
-                    <MapPin className="h-4 w-4 mr-2" />
-                    Obtener mi ubicación
-                  </Button>
-                )}
-              </div>
-              
-              {locationError && (
-                <p className="text-sm text-destructive mt-2">
-                  {locationError}
-                </p>
-              )}
-            </div>
-          ) : null}
           
-          <div className="mt-4 p-4 border rounded-lg bg-muted">
+          <div className="mt-4 p-4 border rounded-lg bg-accent">
             <div className="flex items-center gap-2 mb-2">
               <Key className="h-4 w-4 text-primary" />
-              <h3 className="font-medium">Código PIN actual</h3>
+              <h3 className="font-medium">Código de verificación</h3>
             </div>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
-                <div className="text-2xl font-bold">{currentPin || '------'}</div>
+                <div className="text-3xl font-bold tracking-widest">{currentPin || '----'}</div>
                 <div className="text-sm">
                   Expira en: <span className="font-semibold">{getTimeRemaining()}</span>
                 </div>
@@ -687,50 +576,58 @@ export default function ScanPage() {
                 onClick={generatePin}
                 disabled={loading}
               >
-                Renovar PIN
+                Renovar código
               </Button>
             </div>
             <p className="text-sm text-muted-foreground mt-2">
-              Este código se renueva cada 30 segundos y debe ser compartido en el aula.
+              <strong>IMPORTANTE:</strong> Este código de 4 dígitos se renueva cada 30 segundos. Los estudiantes necesitarán escanear el código QR y luego ingresar este código para verificar su asistencia.
             </p>
           </div>
 
-          <div className="mt-4 p-4 border rounded-lg bg-muted">
-            <h3 className="font-medium mb-2">Enlace para registro de asistencia:</h3>
-            <div className="flex items-center gap-2">
-              <Input
-                readOnly
-                value={`${window.location.origin}/public-attendance/${event.id}`}
-                className="bg-background"
-              />
-              <Button variant="outline" onClick={copyPublicLink}>
-                <Share2 className="h-4 w-4 mr-2" />
-                Copiar
-              </Button>
-            </div>
-            <p className="text-sm text-muted-foreground mt-2">
-              Comparte este enlace con los estudiantes para que registren su asistencia directamente
+
+          <div className="mt-4 p-4 border rounded-lg bg-primary/5">
+            <h3 className="font-medium mb-2 flex items-center gap-2">
+              <QrCode className="h-5 w-5 text-primary" />
+              Código QR para registro de asistencia
+            </h3>
+            
+            <p className="text-sm text-muted-foreground mb-4">
+              Muestra este código QR a los estudiantes. Deberán escanearlo y luego ingresar el código de 4 dígitos que se muestra arriba para verificar su asistencia.
             </p>
-            <div className="flex justify-center">
+            
+            <div className="flex justify-center mb-4">
               <Button
-                variant="outline"
+                variant={showQR ? "default" : "outline"}
                 onClick={() => setShowQR(!showQR)}
                 className="w-full md:w-auto"
               >
                 <QrCode className="h-4 w-4 mr-2" />
-                {showQR ? 'Ocultar QR' : 'Mostrar QR'}
+                {showQR ? 'Ocultar código QR' : 'Mostrar código QR'}
               </Button>
             </div>
 
-            {showQR && (
-              <div className="flex justify-center p-4">
+            {showQR ? (
+              <div className="flex flex-col items-center p-4 bg-white rounded-lg">
                 <QRCodeSVG
                   value={attendanceUrl}
                   size={256}
                   level="H"
-                  includeMargin={true}
-                  className="bg-white p-2 rounded-lg"
                 />
+                <p className="mt-2 text-sm text-center font-medium">
+                  Escanea este código y luego ingresa el código de verificación: <strong>{currentPin || '----'}</strong>
+                </p>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 mt-2">
+                <Input
+                  readOnly
+                  value={`${window.location.origin}/public-attendance/${event.id}`}
+                  className="bg-background"
+                />
+                <Button variant="outline" onClick={copyPublicLink}>
+                  <Share2 className="h-4 w-4 mr-2" />
+                  Copiar
+                </Button>
               </div>
             )}
           </div>
@@ -790,24 +687,6 @@ export default function ScanPage() {
                   <h2 className="text-xl font-semibold">Registro por Documento</h2>
                 </div>
                 
-                {event.require_location && !userLocation && (
-                  <Alert className="mb-4" variant="destructive">
-                    <AlertTitle>Atención</AlertTitle>
-                    <AlertDescription>
-                      Este evento requiere verificación de ubicación. Por favor permite acceso a tu ubicación o usa el método de PIN.
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="mt-2"
-                        onClick={requestUserLocation}
-                      >
-                        <MapPin className="h-4 w-4 mr-2" />
-                        Activar ubicación
-                      </Button>
-                    </AlertDescription>
-                  </Alert>
-                )}
-                
                 <form onSubmit={handleScanByDocument} className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="scan">Documento de Identidad</Label>
@@ -822,7 +701,7 @@ export default function ScanPage() {
                   <Button 
                     type="submit" 
                     className="w-full" 
-                    disabled={loading || (event.require_location && !userLocation)}
+                    disabled={loading}
                   >
                     <UserPlus className="h-4 w-4 mr-2" />
                     {loading ? "Registrando..." : "Registrar Asistencia"}
