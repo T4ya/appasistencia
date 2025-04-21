@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,60 +28,82 @@ export default function PublicAttendance() {
   const [documentInput, setDocumentInput] = useState("");
   const [pinInput, setPinInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [currentPin, setCurrentPin] = useState<string | null>(null);
-  const [pinExpiry, setPinExpiry] = useState<Date | null>(null);
+  
+  // References para valores actualizados - usar useState para UI y useRef para datos más recientes
+  const [latestPin, setLatestPin] = useState<string | null>(null);
+  const [expiryTime, setExpiryTime] = useState<Date | null>(null);
+  
+  // Referencias que mantienen datos actualizados para validaciones
+  const currentPinRef = useRef<string | null>(null);
+  const pinExpiryRef = useRef<Date | null>(null);
+  const checkPinIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     loadEventAndPin();
-  }, [params.id]);
+    
+    // Configurar intervalo de verificación cada 2 segundos para estar más actualizado
+    checkPinIntervalRef.current = setInterval(checkCurrentPin, 2000);
+    
+    return () => {
+      if (checkPinIntervalRef.current) {
+        clearInterval(checkPinIntervalRef.current);
+        checkPinIntervalRef.current = null;
+      }
+    };
+  }, []);
 
   const loadEventAndPin = async () => {
     try {
-      const { data: eventData, error: eventError } = await supabase
+      const { data: eventData, error } = await supabase
         .from("events")
         .select("*")
         .eq("id", params.id)
         .single();
 
-      if (eventError) throw eventError;
-      if (!eventData) {
-        router.push("/");
-        return;
+      if (error || !eventData) {
+        throw new Error("Evento no encontrado");
       }
 
       setEvent(eventData);
-      await checkCurrentPin();
+      await checkCurrentPin(true); // Fuerza actualización inicial
     } catch (error: any) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Error al cargar el evento: " + error.message,
-      });
+      handleError(error.message);
       router.push("/");
     }
   };
 
-  const checkCurrentPin = async () => {
-    if (!event) return;
-
+  const checkCurrentPin = async (forceUpdate = false) => {
     try {
       const { data, error } = await supabase
         .from("events")
         .select("current_pin, pin_expiry")
-        .eq("id", event.id)
+        .eq("id", params.id)
         .single();
 
-      if (error) throw error;
+      if (error || !data) return;
 
       if (data.current_pin && data.pin_expiry) {
-        const expiryDate = new Date(data.pin_expiry);
-        if (expiryDate > new Date()) {
-          setCurrentPin(data.current_pin);
-          setPinExpiry(expiryDate);
+        const newExpiry = new Date(data.pin_expiry);
+        const now = new Date();
+        
+        // Actualizar siempre si: es forzado, o el PIN cambió, o la fecha de expiración cambió
+        if (forceUpdate || 
+            data.current_pin !== currentPinRef.current || 
+            (pinExpiryRef.current && newExpiry.getTime() !== pinExpiryRef.current.getTime())) {
+          
+          // Actualizar las referencias para validación
+          currentPinRef.current = data.current_pin;
+          pinExpiryRef.current = newExpiry;
+          
+          // Actualizar el estado para la UI
+          setLatestPin(data.current_pin);
+          setExpiryTime(newExpiry);
+          
+          console.log("PIN actualizado:", data.current_pin, "expira:", newExpiry);
         }
       }
-    } catch (error: any) {
-      console.error("Error checking PIN:", error);
+    } catch (error) {
+      console.error("Error actualizando PIN:", error);
     }
   };
 
@@ -90,20 +112,34 @@ export default function PublicAttendance() {
     setLoading(true);
 
     try {
-      // First, check if the PIN is valid
-      if (!pinInput) {
-        throw new Error("Debes ingresar el código de verificación");
+      // Forzar una actualización inmediata del PIN antes de validar 
+      await checkCurrentPin(true);
+      
+      // Validación de campos
+      if (!documentInput.trim() || !pinInput.trim()) {
+        throw new Error("Todos los campos son requeridos");
       }
 
+      // Obtener valores actuales desde las referencias
+      const currentPin = currentPinRef.current;
+      const expiryDate = pinExpiryRef.current;
+
+      if (!currentPin || !expiryDate) {
+        throw new Error("Sistema de verificación no disponible");
+      }
+
+      // Validar coincidencia de PIN
       if (pinInput !== currentPin) {
         throw new Error("Código de verificación incorrecto");
       }
 
-      if (!pinExpiry || new Date() > pinExpiry) {
-        throw new Error("El código de verificación ha expirado");
+      // Validar que el PIN no haya expirado
+      const now = new Date();
+      if (now > expiryDate) {
+        throw new Error("El código ha expirado. Solicita uno nuevo");
       }
 
-      // Find the student by document ID
+      // Buscar estudiante
       const { data: student, error: studentError } = await supabase
         .from("students")
         .select("*")
@@ -111,69 +147,70 @@ export default function PublicAttendance() {
         .single();
 
       if (studentError || !student) {
-        throw new Error("Estudiante no encontrado");
+        throw new Error("Estudiante no registrado");
       }
 
-      if (!event) {
-        throw new Error("Evento no encontrado");
-      }
-
-      // Check if the student already registered attendance
+      // Verificar asistencia previa
       const { data: existingAttendance } = await supabase
         .from("attendances")
         .select("*")
-        .eq("event_id", event.id)
-        .eq("student_id", student.id)
+        .match({
+          event_id: event?.id,
+          student_id: student.id
+        })
         .single();
 
       if (existingAttendance) {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "Ya registraste tu asistencia",
-        });
-        return;
+        throw new Error("Ya registraste tu asistencia");
       }
 
-      // Mark the PIN as used
-      await supabase
-        .from("event_pins")
-        .update({ used: true })
-        .eq("event_id", event.id)
-        .eq("pin", currentPin);
-
-      // Register attendance
+      // Registrar asistencia
       const { error: attendanceError } = await supabase
         .from("attendances")
-        .insert([
-          {
-            event_id: event.id,
-            student_id: student.id,
-            verified_by: "pin",
-            verified_by_pin: true,
-            verification_method: "PIN",
-          },
-        ]);
+        .insert([{
+          event_id: event?.id,
+          student_id: student.id,
+          verified_by: "pin",
+          verified_by_pin: true
+        }]);
 
       if (attendanceError) throw attendanceError;
 
+      // Marcar PIN como usado
+      await supabase
+        .from("event_pins")
+        .update({ used: true })
+        .match({
+          event_id: event?.id,
+          pin: currentPin
+        });
+
+      // Éxito
       toast({
-        title: "Éxito",
-        description: `Asistencia registrada para ${student.full_name}`,
+        title: "Asistencia registrada",
+        description: `Bienvenido ${student.full_name}`,
       });
 
+      // Reiniciar formulario
       setDocumentInput("");
       setPinInput("");
-      router.push("/");
+
+      // Redirigir después de 2 segundos
+      setTimeout(() => router.push("/"), 2000);
+
     } catch (error: any) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: error.message,
-      });
+      handleError(error.message);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleError = (message: string) => {
+    toast({
+      variant: "destructive",
+      title: "Error",
+      description: message,
+    });
   };
 
   if (!event) return null;
@@ -198,48 +235,51 @@ export default function PublicAttendance() {
         <div className="max-w-md mx-auto">
           <h1 className="text-3xl font-bold mb-4 text-center">{event.title}</h1>
           <p className="text-muted-foreground text-center mb-6">
-            Fecha: {new Date(event.date).toLocaleDateString()}
+            {new Date(event.date).toLocaleDateString("es-ES", {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
+            })}
           </p>
 
-          <div className="space-y-6">
-            <form onSubmit={handleRegisterAttendance} className="space-y-4">
-              <div className="space-y-2">
+          <form onSubmit={handleRegisterAttendance} className="space-y-6">
+            <div className="space-y-3">
+              <div>
                 <Label htmlFor="document">Documento de Identidad</Label>
                 <Input
                   id="document"
                   value={documentInput}
                   onChange={(e) => setDocumentInput(e.target.value)}
-                  placeholder="Ingrese su documento de identidad"
-                  required
+                  placeholder="Ej: 12345678A"
+                  autoComplete="off"
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="pin">Código de Verificación</Label>
+              
+              <div>
+                <Label htmlFor="pin">Código de Acceso</Label>
                 <Input
                   id="pin"
                   value={pinInput}
-                  onChange={(e) => setPinInput(e.target.value)}
-                  placeholder="Ingrese el código de 4 dígitos mostrado por el profesor"
-                  required
+                  onChange={(e) => setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  placeholder="0000"
                   maxLength={4}
+                  autoComplete="one-time-code"
                 />
               </div>
-              <Button
-                type="submit"
-                className="w-full"
-                disabled={loading}
-              >
-                {loading ? "Verificando..." : "Registrar Asistencia"}
-              </Button>
-            </form>
-
-            <div className="p-4 bg-muted rounded-lg text-center">
-              <h3 className="font-medium mb-2">Instrucciones</h3>
-              <p className="text-sm text-muted-foreground">
-                Para registrar tu asistencia, ingresa tu documento de identidad y el código de verificación de 4 dígitos 
-                que mostrará el profesor en el aula. Este código cambia cada 30 segundos.
-              </p>
             </div>
+
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? "Verificando..." : "Confirmar Asistencia"}
+            </Button>
+          </form>
+
+          <div className="mt-8 p-4 bg-muted/50 rounded-lg">
+            <p className="text-sm text-center text-muted-foreground">
+              Ingresa tu documento de identidad y el código de 4 dígitos
+              proporcionado por el organizador del evento.
+              El código se actualiza automáticamente cada 30 segundos.
+            </p>
           </div>
         </div>
       </main>
