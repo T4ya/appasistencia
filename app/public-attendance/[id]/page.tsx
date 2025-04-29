@@ -29,7 +29,7 @@ export default function PublicAttendance() {
   const [pinInput, setPinInput] = useState("");
   const [loading, setLoading] = useState(false);
   
-  // References para valores actualizados - usar useState para UI y useRef para datos más recientes
+  // Referencias para valores actualizados - usar useState para UI y useRef para datos más recientes
   const [latestPin, setLatestPin] = useState<string | null>(null);
   const [expiryTime, setExpiryTime] = useState<Date | null>(null);
   
@@ -139,56 +139,28 @@ export default function PublicAttendance() {
         throw new Error("El código ha expirado. Solicita uno nuevo");
       }
 
-      // Buscar estudiante
-      const { data: student, error: studentError } = await supabase
-        .from("students")
-        .select("*")
-        .eq("document_id", documentInput)
-        .single();
+      // Usar la API para registrar asistencia en Supabase y Google Sheets
+      const response = await fetch('/api/attendance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          eventId: event?.id,
+          documentId: documentInput,
+        }),
+      });
 
-      if (studentError || !student) {
-        throw new Error("Estudiante no registrado");
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error);
       }
-
-      // Verificar asistencia previa
-      const { data: existingAttendance } = await supabase
-        .from("attendances")
-        .select("*")
-        .match({
-          event_id: event?.id,
-          student_id: student.id
-        })
-        .single();
-
-      if (existingAttendance) {
-        throw new Error("Ya registraste tu asistencia");
-      }
-
-      // Registrar asistencia
-      const { error: attendanceError } = await supabase
-        .from("attendances")
-        .insert([{
-          event_id: event?.id,
-          student_id: student.id,
-          verified_by: "pin",
-          verified_by_pin: true
-        }]);
-
-      if (attendanceError) throw attendanceError;
-
-      // Marcar PIN como usado
-      await supabase
-        .from("event_pins")
-        .update({ used: true })
-        .match({
-          event_id: event?.id,
-          pin: currentPin
-        });
 
       // Éxito
       toast({
         title: "Asistencia registrada",
-        description: `Bienvenido ${student.full_name}`,
+        description: `Bienvenido ${data.student.full_name}`,
       });
 
       // Reiniciar formulario

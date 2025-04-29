@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ArrowLeft, Download, UserPlus, QrCode, Share2, Key } from "lucide-react";
+import { ArrowLeft, Download, UserPlus, QrCode, Share2, Key, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { Logo } from "@/components/logo";
 import { ModeToggle } from "@/components/mode-toggle";
@@ -41,6 +41,7 @@ interface Student {
   full_name: string;
   document_id: string;
   timestamp: string;
+  group?: string; // Para identificar de qué grupo es el estudiante
 }
 
 export default function ScanPage() {
@@ -51,6 +52,7 @@ export default function ScanPage() {
   const [scanInput, setScanInput] = useState("");
   const [pinInput, setPinInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [attendances, setAttendances] = useState<Student[]>([]);
   const [showQR, setShowQR] = useState(false);
   const [currentPin, setCurrentPin] = useState<string | null>(null);
@@ -90,6 +92,9 @@ export default function ScanPage() {
 
   const loadEventAndAttendances = async () => {
     try {
+      setRefreshing(true);
+      
+      // Cargar información del evento
       const { data: eventData, error: eventError } = await supabase
         .from('events')
         .select('*')
@@ -104,6 +109,7 @@ export default function ScanPage() {
 
       setEvent(eventData);
 
+      // Verificar y actualizar PIN
       if (eventData.current_pin && eventData.pin_expiry) {
         const expiryDate = new Date(eventData.pin_expiry);
         const now = new Date();
@@ -119,6 +125,7 @@ export default function ScanPage() {
         await generatePin();
       }
 
+      // Cargar asistencias desde Supabase
       const { data: attendanceData, error: attendanceError } = await supabase
         .from('attendances')
         .select(`
@@ -148,6 +155,8 @@ export default function ScanPage() {
         description: "Error al cargar el evento: " + error.message,
       });
       router.push('/');
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -225,47 +234,27 @@ export default function ScanPage() {
     setLoading(true);
 
     try {
-      const { data: student, error: studentError } = await supabase
-        .from('students')
-        .select('*')
-        .eq('document_id', scanInput)
-        .single();
+      // Usar el endpoint de API para registrar en Supabase y Google Sheets
+      const response = await fetch('/api/attendance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          eventId: event?.id,
+          documentId: scanInput,
+        }),
+      });
 
-      if (studentError || !student) {
-        throw new Error('Estudiante no encontrado');
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error);
       }
-
-      const { data: existingAttendance } = await supabase
-        .from('attendances')
-        .select('*')
-        .eq('event_id', event?.id)
-        .eq('student_id', student.id)
-        .single();
-
-      if (existingAttendance) {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "El estudiante ya registró asistencia",
-        });
-        return;
-      }
-
-      const { error: attendanceError } = await supabase
-        .from('attendances')
-        .insert([
-          {
-            event_id: event?.id,
-            student_id: student.id,
-            verified_by: 'document'
-          }
-        ]);
-
-      if (attendanceError) throw attendanceError;
 
       toast({
         title: "Éxito",
-        description: `Asistencia registrada para ${student.full_name}`,
+        description: `Asistencia registrada para ${data.student.full_name}`,
       });
 
       setScanInput("");
@@ -298,56 +287,36 @@ export default function ScanPage() {
       if (!pinExpiry || new Date() > pinExpiry) {
         throw new Error('El código PIN ha expirado');
       }
+      
+      // Usar el endpoint de API para registrar en Supabase y Google Sheets
+      const response = await fetch('/api/attendance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          eventId: event?.id,
+          documentId: scanInput,
+          verifiedBy: 'pin'
+        }),
+      });
 
-      const { data: student, error: studentError } = await supabase
-        .from('students')
-        .select('*')
-        .eq('document_id', scanInput)
-        .single();
-
-      if (studentError || !student) {
-        throw new Error('Estudiante no encontrado');
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error);
       }
 
-      const { data: existingAttendance } = await supabase
-        .from('attendances')
-        .select('*')
-        .eq('event_id', event?.id)
-        .eq('student_id', student.id)
-        .single();
-
-      if (existingAttendance) {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "El estudiante ya registró asistencia",
-        });
-        return;
-      }
-
+      // Marcar PIN como usado
       await supabase
         .from('event_pins')
         .update({ used: true, verified_by: 'Profesor' })
         .eq('event_id', event?.id)
         .eq('pin', currentPin);
 
-      const { error: attendanceError } = await supabase
-        .from('attendances')
-        .insert([
-          {
-            event_id: event?.id,
-            student_id: student.id,
-            verified_by: 'pin',
-            verified_by_pin: true,
-            verification_method: 'PIN'
-          }
-        ]);
-
-      if (attendanceError) throw attendanceError;
-
       toast({
         title: "Éxito",
-        description: `Asistencia registrada para ${student.full_name} (verificada por PIN)`,
+        description: `Asistencia registrada para ${data.student.full_name} (verificada por PIN)`,
       });
 
       setScanInput("");
@@ -365,13 +334,44 @@ export default function ScanPage() {
     }
   };
 
-  const copyPublicLink = () => {
-    const publicLink = `${window.location.origin}/public-attendance/${params.id}`;
-    navigator.clipboard.writeText(publicLink);
-    toast({
-      title: "¡Enlace copiado!",
-      description: "El enlace para registro de asistencia ha sido copiado al portapapeles",
-    });
+  const downloadGroupAttendances = async (group: string) => {
+    try {
+      setLoading(true);
+      
+      // Usar un endpoint específico para descargar asistencias de Google Sheets
+      const response = await fetch(`/api/attendance/download?eventId=${event?.id}&group=${group}`, {
+        method: 'GET',
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Error al descargar las asistencias');
+      }
+      
+      // Procesar la respuesta como un blob
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `asistencia_${event?.title}_${group}_${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      
+      toast({
+        title: "Descarga completada",
+        description: `Se ha descargado la lista de asistencia del grupo ${group}`,
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message,
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const downloadAttendances = () => {
@@ -402,6 +402,15 @@ export default function ScanPage() {
     a.click();
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
+  };
+
+  const copyPublicLink = () => {
+    const publicLink = `${window.location.origin}/public-attendance/${params.id}`;
+    navigator.clipboard.writeText(publicLink);
+    toast({
+      title: "¡Enlace copiado!",
+      description: "El enlace para registro de asistencia ha sido copiado al portapapeles",
+    });
   };
 
   if (!event) return null;
@@ -511,10 +520,40 @@ export default function ScanPage() {
           <div>
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Registro de Asistencia</h2>
-              <Button onClick={downloadAttendances} variant="outline">
-                <Download className="h-4 w-4 mr-2" />
-                Descargar CSV
-              </Button>
+              <div className="flex gap-2">
+                <Button 
+                  onClick={() => loadEventAndAttendances()} 
+                  variant="outline" 
+                  disabled={refreshing}
+                >
+                  <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+                  Actualizar
+                </Button>
+                <Tabs defaultValue="local">
+                  <TabsList>
+                    <TabsTrigger value="local">CSV Local</TabsTrigger>
+                    <TabsTrigger value="sheets">Google Sheets</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="local" className="absolute">
+                    <Button onClick={downloadAttendances} variant="outline">
+                      <Download className="h-4 w-4 mr-2" />
+                      Descargar CSV
+                    </Button>
+                  </TabsContent>
+                  <TabsContent value="sheets" className="absolute">
+                    <div className="flex gap-2">
+                      <Button onClick={() => downloadGroupAttendances('GRUPO1')} variant="outline">
+                        <Download className="h-4 w-4 mr-2" />
+                        Grupo 1
+                      </Button>
+                      <Button onClick={() => downloadGroupAttendances('GRUPO2')} variant="outline">
+                        <Download className="h-4 w-4 mr-2" />
+                        Grupo 2
+                      </Button>
+                    </div>
+                  </TabsContent>
+                </Tabs>
+              </div>
             </div>
 
             <div className="border rounded-lg">
@@ -560,7 +599,6 @@ export default function ScanPage() {
                   <UserPlus className="h-5 w-5 text-primary" />
                   <h2 className="text-xl font-semibold">Registro por Documento</h2>
                 </div>
-
                 <form onSubmit={handleScanByDocument} className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="scan">Documento de Identidad</Label>

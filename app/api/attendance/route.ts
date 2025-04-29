@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
+import { appendToSheet } from '@/lib/google-sheets';
 
 export async function POST(request: Request) {
   try {
-    const { eventId, documentId } = await request.json();
+    const { eventId, documentId, verifiedBy = 'document' } = await request.json();
 
     // 1. Obtener información del evento
     const { data: event, error: eventError } = await supabase
@@ -55,27 +56,20 @@ export async function POST(request: Request) {
         {
           event_id: eventId,
           student_id: student.id,
+          verified_by: verifiedBy
         }
       ]);
 
     if (attendanceError) throw attendanceError;
 
-    // 5. Registrar asistencia en Google Sheets (usando el endpoint directo)
+    // 5. Registrar asistencia en Google Sheets
     try {
-      const sheetsResponse = await fetch(new URL('/api/attendance-fix', request.url).toString(), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          eventId: event.id,
-          documentId: student.document_id,
-          studentName: student.full_name
-        }),
+      await appendToSheet({
+        documentId: student.document_id,
+        eventId: event.id,
+        eventTitle: event.title,
+        eventDate: new Date(event.date).toLocaleDateString('es-CO')
       });
-      
-      const sheetsResult = await sheetsResponse.json();
-      console.log('Resultado Google Sheets (API):', sheetsResult);
     } catch (sheetError) {
       console.error('Error registrando en Google Sheets:', sheetError);
       // Continuamos con la ejecución aunque falle Google Sheets
@@ -85,7 +79,7 @@ export async function POST(request: Request) {
       message: 'Asistencia registrada correctamente',
       student: {
         full_name: student.full_name,
-        document_id: student.document_id,
+        code: student.code,
       }
     });
 

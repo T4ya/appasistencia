@@ -32,88 +32,126 @@ interface StudentLocation {
   sheetId: string;
   rowIndex: number;
   columnIndex: number;
+  group: string;
 }
 
-async function findStudentInSheet(documentId: string, eventId: string, sheetId: string): Promise<StudentLocation | null> {
+// Dump all values to console for inspection
+async function dumpSheetValues(sheetId: string) {
   try {
-    console.log(`Buscando estudiante en hoja ${sheetId}:`, { documentId, eventId });
+    console.log(`===== DUMPING SHEET DATA FOR ${sheetId} =====`);
+    const metaResponse = await sheets.spreadsheets.get({
+      spreadsheetId: sheetId
+    });
+    console.log('Sheets in workbook:', metaResponse.data.sheets?.map(s => s.properties?.title));
 
-    // Obtener todos los datos de la hoja
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: 'ASISTENCIA',
+      range: 'ASISTENCIA'
     });
-
+    
     const values = response.data.values || [];
-    console.log(`Datos obtenidos: ${values.length} filas`);
+    console.log(`Total rows: ${values.length}`);
+    
+    // Print first rows for inspection
+    console.log('First rows sample:');
+    for (let i = 0; i < Math.min(10, values.length); i++) {
+      console.log(`Row ${i+1}:`, values[i]);
+    }
+    
+    // Print rows starting student data
+    console.log('Student data sample:');
+    for (let i = 6; i < Math.min(15, values.length); i++) {
+      if (values[i] && values[i].length > 3) {
+        console.log(`Row ${i+1}:`, {
+          code: values[i][0],
+          name: values[i][2],
+          documentId: values[i][3]
+        });
+      } else {
+        console.log(`Row ${i+1}: Incomplete data`, values[i]);
+      }
+    }
+    
+    return values;
+  } catch (error) {
+    console.error(`Error dumping sheet ${sheetId}:`, error);
+    return null;
+  }
+}
+
+async function findStudentInSheet(documentId: string, eventId: string, sheetId: string, groupName: string): Promise<StudentLocation | null> {
+  try {
+    console.log(`\n===== BUSCANDO ESTUDIANTE EN HOJA ${sheetId} (${groupName}) =====`);
+    console.log('Parámetros de búsqueda:', { documentId, eventId });
+    
+    // Dump all sheet data for inspection
+    const values = await dumpSheetValues(sheetId);
+    if (!values) {
+      console.error(`No se pudieron obtener datos de la hoja ${sheetId}`);
+      return null;
+    }
 
     // Buscar el título del evento
+    console.log('\n----- BUSCANDO EVENTO -----');
     let eventColumnIndex = -1;
-    for (let row = 0; row < 10; row++) {
+    let eventFoundInRow = -1;
+    
+    for (let row = 0; row < 6; row++) {
       const currentRow = values[row] || [];
+      console.log(`Revisando fila ${row+1} para evento:`, currentRow);
+      
       for (let col = 0; col < currentRow.length; col++) {
         const cellValue = String(currentRow[col] || '');
+        console.log(`  Celda [${row+1},${String.fromCharCode(65+col)}]: "${cellValue}" - ¿Contiene "${eventId}"?`);
+        
         if (cellValue && cellValue.includes(eventId)) {
           eventColumnIndex = col;
-          console.log(`Evento encontrado en [${row},${col}]`);
+          eventFoundInRow = row + 1;
+          console.log(`  ¡ENCONTRADO! Evento en [${eventFoundInRow},${String.fromCharCode(65+col)}]`);
           break;
         }
       }
       if (eventColumnIndex !== -1) break;
     }
 
-    // Si no se encuentra el evento, crear una nueva columna
     if (eventColumnIndex === -1) {
-      console.log(`Evento no encontrado, creando nueva columna...`);
-      
-      // Encontrar la primera columna disponible después de E (índice 5 = columna F)
-      eventColumnIndex = 5;
-      const headerRow = values[0] || [];
-      for (let i = 5; i < headerRow.length + 1; i++) {
-        if (!headerRow[i] || headerRow[i] === '') {
-          eventColumnIndex = i;
-          break;
-        }
-      }
-      
-      const colLetter = String.fromCharCode(65 + eventColumnIndex);
-      console.log(`Usando columna ${colLetter} (índice ${eventColumnIndex})`);
-      
-      // Agregar el ID del evento en la primera fila
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: sheetId,
-        range: `${WORKSHEET_NAME}!${colLetter}1`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: {
-          values: [[eventId]]
-        }
-      });
-      
-      console.log(`ID del evento agregado a la columna ${colLetter}`);
+      console.log(`❌ Evento con ID "${eventId}" NO encontrado en ninguna celda de las primeras 6 filas`);
+      return null;
     }
 
     // Encontrar la fila del estudiante
+    console.log('\n----- BUSCANDO ESTUDIANTE -----');
     let studentRowIndex = -1;
+    
+    console.log(`Buscando documento "${documentId}" en columna D (índice 3)`);
     for (let i = 6; i < values.length; i++) {
-      const rowDocId = values[i] && values[i][3] ? String(values[i][3]).trim() : '';
-      const searchDocId = String(documentId).trim();
-      
-      if (rowDocId === searchDocId) {
-        studentRowIndex = i + 1; // +1 porque las filas en Sheets empiezan en 1
-        console.log(`Estudiante encontrado en fila ${studentRowIndex}`);
-        break;
+      if (values[i] && values[i].length > 3) {
+        const rowDocumentId = String(values[i][3] || '').trim();
+        const searchDocumentId = String(documentId).trim();
+        
+        console.log(`  Fila ${i+1}: "${rowDocumentId}" vs "${searchDocumentId}" - ¿Coinciden?`, 
+          rowDocumentId === searchDocumentId ? '✅ SÍ' : '❌ NO');
+        
+        if (rowDocumentId === searchDocumentId) {
+          studentRowIndex = i + 1;
+          console.log(`  ¡ENCONTRADO! Estudiante en fila ${studentRowIndex}`);
+          break;
+        }
+      } else {
+        console.log(`  Fila ${i+1}: Datos insuficientes`, values[i]);
       }
     }
 
     if (studentRowIndex === -1) {
-      console.log(`Estudiante no encontrado en hoja ${sheetId}`);
+      console.log(`❌ Estudiante con documento "${documentId}" NO encontrado`);
       return null;
     }
 
     return {
       sheetId,
       rowIndex: studentRowIndex,
-      columnIndex: eventColumnIndex
+      columnIndex: eventColumnIndex,
+      group: groupName
     };
   } catch (error) {
     console.error(`Error buscando en hoja ${sheetId}:`, error);
@@ -122,71 +160,125 @@ async function findStudentInSheet(documentId: string, eventId: string, sheetId: 
 }
 
 async function updateAttendance(location: StudentLocation, data: AttendanceRecord) {
-  const columnLetter = String.fromCharCode(65 + location.columnIndex);
+  try {
+    console.log(`\n===== ACTUALIZANDO ASISTENCIA EN ${location.group} =====`);
+    console.log('Ubicación:', location);
+    
+    const columnLetter = String.fromCharCode(65 + location.columnIndex);
+    const attendanceCell = `${columnLetter}${location.rowIndex}`;
+    const dateCell = `${columnLetter}7`;
+    
+    console.log(`Marcando asistencia en celda ${attendanceCell}`);
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: location.sheetId,
+      range: `${WORKSHEET_NAME}!${attendanceCell}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [["1"]]
+      }
+    });
+    console.log(`✅ Asistencia registrada en celda ${attendanceCell}`);
 
-  // Actualizar la asistencia
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: location.sheetId,
-    range: `${WORKSHEET_NAME}!${columnLetter}${location.rowIndex}`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: {
-      values: [["1"]]
-    }
-  });
+    console.log(`Actualizando fecha en celda ${dateCell}`);
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: location.sheetId,
+      range: `${WORKSHEET_NAME}!${dateCell}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[data.eventDate]]
+      }
+    });
+    console.log(`✅ Fecha actualizada en celda ${dateCell}`);
 
-  // Actualizar la fecha en la fila 7
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: location.sheetId,
-    range: `${WORKSHEET_NAME}!${columnLetter}7`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: {
-      values: [[data.eventDate]]
-    }
-  });
+    // Actualizar el total
+    const totalRange = `${WORKSHEET_NAME}!G${location.rowIndex}:T${location.rowIndex}`;
+    console.log(`Obteniendo valores para calcular total: ${totalRange}`);
+    const rowResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: location.sheetId,
+      range: totalRange,
+    });
 
-  // Actualizar el total
-  const rowResponse = await sheets.spreadsheets.values.get({
-    spreadsheetId: location.sheetId,
-    range: `${WORKSHEET_NAME}!G${location.rowIndex}:T${location.rowIndex}`,
-  });
+    const attendanceValues = rowResponse.data.values?.[0] || [];
+    console.log('Valores de asistencia:', attendanceValues);
+    const total = attendanceValues.filter(v => v === "1").length;
 
-  const attendanceValues = rowResponse.data.values?.[0] || [];
-  const total = attendanceValues.filter(v => v === "1").length;
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: location.sheetId,
-    range: `${WORKSHEET_NAME}!U${location.rowIndex}`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: {
-      values: [[total]]
-    }
-  });
+    console.log(`Actualizando total en celda U${location.rowIndex} con valor ${total}`);
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: location.sheetId,
+      range: `${WORKSHEET_NAME}!U${location.rowIndex}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[total]]
+      }
+    });
+    console.log(`✅ Total actualizado en celda U${location.rowIndex}`);
+    
+    return true;
+  } catch (error) {
+    console.error('Error al actualizar asistencia:', error);
+    return false;
+  }
 }
 
 export async function appendToSheet(data: AttendanceRecord) {
   try {
-    console.log('=== Iniciando registro de asistencia ===');
+    console.log('\n\n======================================================');
+    console.log('===== INICIANDO REGISTRO DE ASISTENCIA =====');
+    console.log('======================================================');
     console.log('Datos recibidos:', data);
+    console.log('Variables de entorno:');
+    console.log('- GOOGLE_CLIENT_EMAIL:', GOOGLE_CLIENT_EMAIL ? 'Configurado ✅' : 'NO CONFIGURADO ❌');
+    console.log('- GOOGLE_PRIVATE_KEY:', GOOGLE_PRIVATE_KEY ? 'Configurado ✅' : 'NO CONFIGURADO ❌');
+    console.log('- GOOGLE_SHEET_ID_GRUPO1:', SHEET_IDS.GRUPO1);
+    console.log('- GOOGLE_SHEET_ID_GRUPO2:', SHEET_IDS.GRUPO2);
 
     // Verificar presencia de IDs de hojas
     if (!SHEET_IDS.GRUPO1 || !SHEET_IDS.GRUPO2) {
       throw new Error('Faltan IDs de hojas de cálculo en la configuración');
     }
 
+    // Intentar buscar en ambos grupos
+    let successDetails = null;
+    
     // Buscar en Grupo 1
-    const locationGrupo1 = await findStudentInSheet(data.documentId, data.eventId, SHEET_IDS.GRUPO1);
+    console.log('\n----- BÚSQUEDA EN GRUPO 1 -----');
+    const locationGrupo1 = await findStudentInSheet(data.documentId, data.eventId, SHEET_IDS.GRUPO1, 'GRUPO1');
     if (locationGrupo1) {
-      await updateAttendance(locationGrupo1, data);
-      return { success: true, message: 'Asistencia registrada en Grupo 1' };
+      console.log('✅ Estudiante encontrado en Grupo 1');
+      const result = await updateAttendance(locationGrupo1, data);
+      if (result) {
+        successDetails = { success: true, message: 'Asistencia registrada en Grupo 1', location: locationGrupo1 };
+        // NO RETORNAMOS AQUÍ - Seguimos buscando en Grupo 2 para depuración
+      }
+    } else {
+      console.log('❌ Estudiante NO encontrado en Grupo 1');
     }
 
-    // Si no está en Grupo 1, buscar en Grupo 2
-    const locationGrupo2 = await findStudentInSheet(data.documentId, data.eventId, SHEET_IDS.GRUPO2);
+    // Buscar en Grupo 2 (siempre intentamos, incluso si ya tuvimos éxito en Grupo 1)
+    console.log('\n----- BÚSQUEDA EN GRUPO 2 -----');
+    const locationGrupo2 = await findStudentInSheet(data.documentId, data.eventId, SHEET_IDS.GRUPO2, 'GRUPO2');
     if (locationGrupo2) {
-      await updateAttendance(locationGrupo2, data);
-      return { success: true, message: 'Asistencia registrada en Grupo 2' };
+      console.log('✅ Estudiante encontrado en Grupo 2');
+      // Solo actualizamos si no hemos tenido éxito en Grupo 1
+      if (!successDetails) {
+        const result = await updateAttendance(locationGrupo2, data);
+        if (result) {
+          successDetails = { success: true, message: 'Asistencia registrada en Grupo 2', location: locationGrupo2 };
+        }
+      } else {
+        console.log('⚠️ ATENCIÓN: Estudiante encontrado en ambos grupos. Se registró en Grupo 1.');
+      }
+    } else {
+      console.log('❌ Estudiante NO encontrado en Grupo 2');
     }
 
+    // Verificar resultado final
+    if (successDetails) {
+      console.log('✅ RESULTADO FINAL: Asistencia registrada exitosamente en:', successDetails.location.group);
+      return successDetails;
+    }
+
+    console.error('❌ RESULTADO FINAL: Estudiante no encontrado en ninguno de los grupos');
     throw new Error('Estudiante no encontrado en ninguno de los grupos');
 
   } catch (error) {
